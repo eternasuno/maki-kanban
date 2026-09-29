@@ -1,194 +1,160 @@
 local Store = require("kanban.store")
 
 local store = Store.new()
-
 local M = {}
 
 local COLUMNS = {
   { status = "todo", title = "TODO" },
-  { status = "doing", title = "Doing" },
-  { status = "done", title = "Complete" },
+  { status = "doing", title = "DOING" },
+  { status = "done", title = "DONE" },
 }
-
-local FOOTER = { { "h/l", "column" }, { "1-3", "jump" }, { "j/k", "task" }, { "q", "close" } }
 local COLUMN_COLORS = {
   maki.ui.theme_color("accent"),
   maki.ui.theme_color("warning"),
   maki.ui.theme_color("success"),
 }
-local MARGIN = 4
-local MIN_WIDTH = 24
-local MAX_WIDTH = 140
-local TARGET_HEIGHT = 18
-local FOOTER_ROWS = 3
-local RESERVED_TOP = 1
+local HORIZONTAL_PADDING = 2
+local VERTICAL_PADDING = 1
 local open_win = nil
 
+local function styled(text, color, background, bold)
+  return { text, { fg = color, bg = background, bold = bold } }
+end
+
 local function fit(text, width)
+  if width <= 0 then return "" end
   if maki.ui.display_width(text) > width then
     text = maki.ui.truncate_text(text, width).head
   end
   return text .. string.rep(" ", math.max(0, width - maki.ui.display_width(text)))
 end
 
-local function board_tasks(board)
-  local tasks = {}
-  for id, task in pairs(board.tasks) do
-    tasks[#tasks + 1] = { id = id, title = task.title, status = task.status }
-  end
-  table.sort(tasks, function(a, b)
-    return a.id < b.id
-  end)
-  return tasks
+local function window_width(term)
+  return math.max(1, math.floor(term.cols * 0.9))
 end
 
-local function column_widths(content_width)
-  local num_cols = #COLUMNS
-  local spacing = num_cols - 1
-  local borders = num_cols * 2
-  local outer_padding = 2
-  local avail = math.max(0, content_width - spacing - borders - outer_padding)
-  local base = math.floor(avail / num_cols)
-  local rem = avail % num_cols
+local function window_height(term)
+  return math.max(1, math.floor(term.rows * 0.9))
+end
+
+local function make_cards(tasks)
+  local cards = { todo = {}, doing = {}, done = {} }
+  for _, task in ipairs(tasks) do
+    local bucket = cards[task.status]
+    if bucket then bucket[#bucket + 1] = task end
+  end
+  return cards
+end
+
+local function padding(state)
+  local horizontal = state.width >= 8 and HORIZONTAL_PADDING or 0
+  local vertical = state.height >= 5 and VERTICAL_PADDING or 0
+  return horizontal, vertical
+end
+
+local function pane_widths(width, focused)
+  if width < 60 then return { width }, { focused } end
+  local usable = width - 2
+  local base, extra = math.floor(usable / 3), usable % 3
   local widths = {}
-  for i = 1, num_cols do
-    widths[i] = math.max(1, base + (i <= rem and 1 or 0))
-  end
-  return widths
-end
-local function styled(text, color, background)
-  return { text, { fg = color, bg = background } }
+  for i = 1, 3 do widths[i] = base + (i <= extra and 1 or 0) end
+  return widths, { 1, 2, 3 }
 end
 
-local function border_cell(text, color)
-  return styled(text, color)
+local function clamp_state(state)
+  local _, vertical = padding(state)
+  local viewport = math.max(0, state.height - 2 * vertical - 2)
+  for i, column in ipairs(COLUMNS) do
+    local count = #state.cards[column.status]
+    state.selected[i] = math.min(math.max(1, state.selected[i]), math.max(1, count))
+    local max_offset = math.max(0, count - viewport)
+    state.offsets[i] = math.min(math.max(0, state.offsets[i]), max_offset)
+    if state.selected[i] <= state.offsets[i] then
+      state.offsets[i] = state.selected[i] - 1
+    elseif state.selected[i] > state.offsets[i] + viewport then
+      state.offsets[i] = state.selected[i] - viewport
+    end
+    state.offsets[i] = math.min(math.max(0, state.offsets[i]), max_offset)
+  end
 end
 
-local function footer_lines(width)
-  local footer_color = maki.ui.theme_color("accent")
-  local inner_width = math.max(0, width - 2)
-  local hints = {}
-  for _, item in ipairs(FOOTER) do
-    hints[#hints + 1] = " " .. item[1] .. " " .. item[2]
+local function board_lines(state)
+  clamp_state(state)
+  local horizontal, vertical = padding(state)
+  local pane_width = state.width - 2 * horizontal
+  local lines = {}
+  if pane_width < 3 or state.height - 2 * vertical < 2 then
+    for _ = 1, state.height do lines[#lines + 1] = string.rep(" ", state.width) end
+    return lines
   end
-  local hint_text = maki.ui.truncate_text(table.concat(hints, " "), inner_width).head
-  return {
-    { styled("┌" .. string.rep("─", inner_width) .. "┐", footer_color) },
-    {
-      styled("│", footer_color),
-      styled(fit(hint_text, inner_width), maki.ui.theme_color("foreground"), maki.ui.theme_color("background")),
-      styled("│", footer_color),
-    },
-    { styled("└" .. string.rep("─", inner_width) .. "┘", footer_color) },
-  }
-end
+  local widths, visible = pane_widths(pane_width, state.focused_column)
+  local function add_line(spans)
+    if horizontal > 0 then
+      table.insert(spans, 1, styled(string.rep(" ", horizontal)))
+      spans[#spans + 1] = styled(string.rep(" ", horizontal))
+    end
+    lines[#lines + 1] = spans
+  end
+  for _ = 1, vertical do lines[#lines + 1] = string.rep(" ", state.width) end
+  local header = {}
+  for position, i in ipairs(visible) do
+    local column = COLUMNS[i]
+    local color = COLUMN_COLORS[i]
+    local title = string.format("[%d] %s(%d)", i, column.title, #state.cards[column.status])
+    local heading = maki.ui.truncate_text(title, math.max(0, widths[position] - 3)).head
+    header[#header + 1] = styled("┌─" .. heading .. string.rep("─", math.max(0, widths[position] - 3 - maki.ui.display_width(heading))) .. "┐", color, nil, i == state.focused_column)
+    if position < #visible then header[#header + 1] = styled(" ") end
+  end
+  add_line(header)
 
-local function append_footer(lines, width)
-  for _, line in ipairs(footer_lines(width)) do
-    lines[#lines + 1] = line
+  for row = 1, math.max(0, state.height - 2 * vertical - 2) do
+    local line = {}
+    for position, i in ipairs(visible) do
+      local column = COLUMNS[i]
+      local color = COLUMN_COLORS[i]
+      local width = widths[position]
+      local task_index = state.offsets[i] + row
+      local task = state.cards[column.status][task_index]
+      local title = task and task.title or ""
+      line[#line + 1] = styled("│", color, nil, i == state.focused_column)
+      local selected = task and i == state.focused_column and task_index == state.selected[i]
+      if selected then
+        local selection = maki.ui.theme_style("item_selected") or {}
+        line[#line + 1] = styled(" " .. fit(title, math.max(0, width - 4)) .. " ", selection.fg or maki.ui.theme_color("background"), selection.bg or maki.ui.theme_color("accent"))
+      else
+        line[#line + 1] = styled(" " .. fit(title, math.max(0, width - 4)) .. " ", maki.ui.theme_color("foreground"))
+      end
+      line[#line + 1] = styled("│", color, nil, i == state.focused_column)
+      if position < #visible then line[#line + 1] = styled(" ") end
+    end
+    add_line(line)
   end
+  local bottom = {}
+  for position, i in ipairs(visible) do
+    bottom[#bottom + 1] = styled("└" .. string.rep("─", math.max(0, widths[position] - 2)) .. "┘", COLUMN_COLORS[i], nil, i == state.focused_column)
+    if position < #visible then bottom[#bottom + 1] = styled(" ") end
+  end
+  add_line(bottom)
+  for _ = 1, vertical do lines[#lines + 1] = string.rep(" ", state.width) end
+  return lines
 end
 
 local function error_lines(err, width, height)
-  local lines = {
-    { { "Could not load the kanban board", "bold" } },
-    fit(tostring(err or "unknown error"), width),
-  }
-  while #lines < height - FOOTER_ROWS do
-    lines[#lines + 1] = ""
-  end
-  append_footer(lines, width)
+  local text = "Could not load kanban: " .. tostring(err or "unknown error")
+  local lines = { fit(text, width) }
+  while #lines < height do lines[#lines + 1] = string.rep(" ", width) end
   return lines
 end
 
-local function board_lines(tasks, content_width, content_height, offsets, focused_column, selected)
-  local widths = column_widths(content_width)
-  local cards = {}
-  for _, column in ipairs(COLUMNS) do
-    cards[column.status] = {}
+local function reload(state)
+  local tasks, err = store:list()
+  if not tasks then
+    state.valid, state.error, state.tasks = false, err, {}
+    return
   end
-  for _, task in ipairs(tasks) do
-    local bucket = cards[task.status]
-    if bucket then
-      bucket[#bucket + 1] = task
-    end
-  end
-  local rows = math.max(1, content_height - FOOTER_ROWS - 2)
-  local lines = {}
-  local header = {}
-  for i, column in ipairs(COLUMNS) do
-    local color = COLUMN_COLORS[i]
-    local title = "[" .. i .. "] " .. column.title
-    local segment = "┌" .. title .. string.rep("─", math.max(0, widths[i] - maki.ui.display_width(title))) .. "┐"
-    header[#header + 1] = styled(segment, color)
-    if i < #COLUMNS then header[#header + 1] = styled(" ", color) end
-  end
-  lines[1] = header
-
-  for row = 1, rows do
-    local line = {}
-    for i, column in ipairs(COLUMNS) do
-      local bucket = cards[column.status]
-      local task_index = row + offsets[i]
-      local task = bucket[task_index]
-      local color = COLUMN_COLORS[i]
-      local is_selected = task and i == focused_column and selected[i] == task_index
-      local text = task and task.title or (row == 1 and #bucket == 0 and "(no tasks)" or "")
-      line[#line + 1] = border_cell("│", color)
-      if is_selected then
-        line[#line + 1] = { " " .. fit(text, math.max(0, widths[i] - 2)) .. " ", { fg = color, bg = maki.ui.theme_color("accent") } }
-      else
-        line[#line + 1] = styled(" " .. fit(text, math.max(0, widths[i] - 2)) .. " ", color)
-      end
-      line[#line + 1] = border_cell("│", color)
-      if i < #COLUMNS then line[#line + 1] = styled(" ", color) end
-    end
-    lines[#lines + 1] = line
-  end
-
-  local bottom = {}
-  for i, width in ipairs(widths) do
-    bottom[#bottom + 1] = border_cell("└" .. string.rep("─", width) .. "┘", COLUMN_COLORS[i])
-    if i < #widths then bottom[#bottom + 1] = styled(" ", COLUMN_COLORS[i]) end
-  end
-  lines[#lines + 1] = bottom
-  while #lines < content_height - FOOTER_ROWS - 1 do
-    local blank = {}
-    for i, width in ipairs(widths) do
-      blank[#blank + 1] = border_cell("│", COLUMN_COLORS[i])
-      blank[#blank + 1] = styled(string.rep(" ", width), COLUMN_COLORS[i])
-      blank[#blank + 1] = border_cell("│", COLUMN_COLORS[i])
-      if i < #widths then blank[#blank + 1] = styled(" ", COLUMN_COLORS[i]) end
-    end
-    lines[#lines + 1] = blank
-  end
-
-  append_footer(lines, content_width)
-  return lines
-end
-
-local function window_width(term)
-  return math.min(MAX_WIDTH, math.max(MIN_WIDTH, term.cols - MARGIN))
-end
-local function window_height(term)
-  return math.max(1, math.min(TARGET_HEIGHT + FOOTER_ROWS, term.rows - MARGIN))
-end
-
-local function clamp_offset(offset, max_offset)
-  if offset < 0 then
-    return 0
-  end
-  if offset > max_offset then
-    return max_offset
-  end
-  return offset
-end
-
-local function column_metrics(state, index)
-  local count = #state.cards[COLUMNS[index].status]
-  local viewport = math.max(1, state.height - FOOTER_ROWS - 2)
-  local max_offset = math.max(0, count - viewport)
-  return viewport, max_offset
+  state.valid, state.tasks = true, tasks
+  state.cards = make_cards(tasks)
+  clamp_state(state)
 end
 
 local function handle_key(state, key)
@@ -200,115 +166,59 @@ local function handle_key(state, key)
   elseif key == "h" or key == "<Left>" then
     state.focused_column = (state.focused_column - 2) % #COLUMNS + 1
   elseif key == "j" or key == "<Down>" or key == "k" or key == "<Up>" then
-    local column = state.focused_column
-    local count = #state.cards[COLUMNS[column].status]
-    local viewport, max_offset = column_metrics(state, column)
-    if key == "j" or key == "<Down>" then
-      state.selected[column] = math.min(count, state.selected[column] + 1)
-    else
-      state.selected[column] = math.max(1, state.selected[column] - 1)
-    end
-    state.offsets[column] = clamp_offset(state.selected[column] - viewport, max_offset)
-    if state.selected[column] <= state.offsets[column] then
-      state.offsets[column] = state.selected[column] - 1
-    end
+    local i = state.focused_column
+    local count = #state.cards[COLUMNS[i].status]
+    state.selected[i] = math.max(1, math.min(count, state.selected[i] + ((key == "j" or key == "<Down>") and 1 or -1)))
+    clamp_state(state)
+  elseif key == "r" then
+    reload(state)
   else
     return false
   end
-  state.lines = board_lines(state.tasks, state.content_width, state.content_height, state.offsets, state.focused_column, state.selected)
+  state.lines = state.valid and board_lines(state) or error_lines(state.error, state.width, state.height)
   return true
 end
+
 function M.open()
-  if open_win then
-    return
-  end
-
+  if open_win then return end
   local term = maki.ui.terminal_size()
-  local width = window_width(term)
-  local height = window_height(term)
+  local width, height = window_width(term), window_height(term)
   local buf = maki.ui.buf({ scratch = true })
-  local board, err = store:load()
-  local tasks = board and board_tasks(board) or nil
-  local cards = {}
-  for _, column in ipairs(COLUMNS) do
-    cards[column.status] = {}
-  end
-
-  local valid = tasks ~= nil
-  local lines
-  if valid then
-    for _, task in ipairs(tasks) do
-      local bucket = cards[task.status]
-      if bucket then
-        bucket[#bucket + 1] = task
-      end
-    end
-    lines = board_lines(tasks, width, height, { 0, 0, 0 }, 1, { 1, 1, 1 })
-  else
-    lines = error_lines(err, width, height)
-  end
-  buf:set_lines(lines)
-
+  local state = {
+    width = width, height = height, focused_column = 1,
+    offsets = { 0, 0, 0 }, selected = { 1, 1, 1 },
+    valid = true, tasks = {}, cards = { todo = {}, doing = {}, done = {} },
+  }
+  reload(state)
+  state.lines = state.valid and board_lines(state) or error_lines(state.error, width, height)
+  buf:set_lines(state.lines)
   local win = maki.ui.open_win(buf, {
-    width = width,
-    height = height,
-    border = "none",
-    focus = true,
-    cursor_line = false,
+    width = "90%", height = "90%", border = "none", focus = true, cursor_line = false,
   })
   open_win = win
-
-  local state = {
-    valid = valid,
-    error = err,
-    tasks = tasks or {},
-    cards = cards,
-    offsets = { 0, 0, 0 },
-    selected = { 1, 1, 1 },
-    focused_column = 1,
-    height = height,
-    content_width = width,
-    content_height = height,
-  }
 
   local ok, loop_err = pcall(function()
     while true do
       local ev = win:recv()
-      if not ev or ev.type == "close" then
-        return
-      elseif ev.type == "resize" then
+      if not ev or ev.type == "close" then return end
+      if ev.type == "resize" then
         local new_term = maki.ui.terminal_size()
-        local new_width = window_width(new_term)
-        local new_height = window_height(new_term)
-        if new_width ~= width or new_height ~= state.height then
-          width = new_width
-          state.height = new_height
-          state.content_width = new_width
-          state.content_height = new_height
-          win:set_config({ width = new_width, height = new_height })
-          if state.valid then
-            state.lines = board_lines(state.tasks, new_width, new_height, state.offsets, state.focused_column, state.selected)
-          else
-            state.lines = error_lines(state.error, new_width, new_height)
-          end
+        local new_width = ev.width or window_width(new_term)
+        local new_height = ev.height or window_height(new_term)
+        if new_width ~= state.width or new_height ~= state.height then
+          state.width, state.height = new_width, new_height
+          state.lines = state.valid and board_lines(state) or error_lines(state.error, new_width, new_height)
           buf:set_lines(state.lines)
         end
       elseif ev.type == "key" then
-        if ev.key == "q" or ev.key == "<Esc>" then
-          return
-        end
-        if handle_key(state, ev.key) then
-          buf:set_lines(state.lines)
-        end
+        if ev.key == "q" or ev.key == "<Esc>" then return end
+        if handle_key(state, ev.key) then buf:set_lines(state.lines) end
       end
     end
   end)
-
   win:close()
   open_win = nil
-  if not ok then
-    error(loop_err)
-  end
+  if not ok then error(loop_err) end
 end
 
 return M
