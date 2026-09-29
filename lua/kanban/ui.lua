@@ -41,8 +41,12 @@ function M.open()
           if state.task then state.task:resize(new_width, new_height) end
           buf:set_lines(state.view == "board" and state.board:render() or state.task:render())
         end
+      elseif ev.type == "paste" then
+        if state.view == "task" and state.task:handle_paste(ev.text) then
+          buf:set_lines(state.task:render())
+        end
       elseif ev.type == "key" then
-        if ev.key == "q" or ev.key == "<Esc>" then return end
+        if (ev.key == "q" or ev.key == "<Esc>") and not (state.view == "task" and state.task.editing) then return end
         if state.view == "board" then
           if ev.key == "<CR>" or ev.key == "<Enter>" then
             local selected = state.board:selected_task()
@@ -55,10 +59,13 @@ function M.open()
             buf:set_lines(state.board:render())
           end
         else
-          local action = state.task:handle_key(ev.key)
+          local action = state.task:handle_key(ev.key, store)
           if action == "back" then
             state.view, state.task = "board", nil
             buf:set_lines(state.board:render())
+          elseif action == "changed" then
+            state.board:reload(store)
+            buf:set_lines(state.task:render())
           elseif action then
             buf:set_lines(state.task:render())
           end

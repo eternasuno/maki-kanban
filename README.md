@@ -14,7 +14,11 @@ Restart Maki and approve the package and its `fs_read` / `fs_write` permissions.
 
 ## Usage
 
-`/kanban` opens the read-only Kanban board with TODO, DOING and DONE columns. Use `h`/`l` or Left/Right (or `1`/`2`/`3`) to focus a column, and `j`/`k` or Up/Down to select a task. Press Enter to view its read-only task detail in the same window. Scroll the description with `j`/`k`, Up/Down, PageDown/PageUp or `g`/`G`; press `b` to return to the board with selection and scroll position intact. `q` or Esc closes the Kanban UI from either view. UI editing is not implemented yet. The agent can use:
+`/kanban` opens the Kanban board with TODO, DOING and DONE columns. Use `h`/`l` or Left/Right (or `1`/`2`/`3`) to focus a column, and `j`/`k` or Up/Down to select a task. Press Enter to open Task Detail in the same window.
+
+In Task Detail, Tab / Shift+Tab switches between Title, Status and Description; `j`/`k`, Up/Down, PageDown/PageUp and `g`/`G` scroll the description. Enter edits the focused field. Title is edited inline, and Status is switched with `h`/`l` or Left/Right; Enter saves either field and Esc cancels. Description opens a temporary file in `$EDITOR`: save the file and exit to save the change, or exit without saving to cancel (no change). `b` returns to the board with selection and scroll position intact; `q` or Esc closes the Kanban UI outside inline editing.
+
+The agent can use:
 
 - `task_list` — list every task, including its ID.
 - `task_get` — read a task by `id`.
@@ -76,4 +80,4 @@ In this development environment the installed Maki 0.5.7 CLI confirmed registrat
 
 ## MVP limitations
 
-The UI is read-only. UI editing is not implemented yet. There is no subagent tracking, execution hooks, delete operation, or concurrent write protection. There are no additional task fields or backend service.
+Task creation and deletion are not available in the UI. There is no subagent tracking, execution hooks, delete operation, or concurrent write protection. There are no additional task fields or backend service.
