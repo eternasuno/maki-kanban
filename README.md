@@ -14,7 +14,7 @@ Restart Maki and approve the package and its `fs_read` / `fs_write` permissions.
 
 ## Usage
 
-`/kanban` opens a read-only three-column window (TODO, Doing, Complete). Press `q` or Esc to close; scroll a tall board with `j`/`k`, the arrow keys, PageUp/PageDown, or `g`/`G`. The agent can use:
+`/kanban` opens the read-only Kanban board with TODO, DOING and DONE columns. Use `h`/`l` or Left/Right (or `1`/`2`/`3`) to focus a column, and `j`/`k` or Up/Down to select a task. Press Enter to view its read-only task detail in the same window. Scroll the description with `j`/`k`, Up/Down, PageDown/PageUp or `g`/`G`; press `b` to return to the board with selection and scroll position intact. `q` or Esc closes the Kanban UI from either view. UI editing is not implemented yet. The agent can use:
 
 - `task_list` — list every task, including its ID.
 - `task_get` — read a task by `id`.
@@ -41,7 +41,7 @@ The stored `tasks` value is an ID-to-task object, not an array; the task body do
 
 ## Statuses
 
-`todo`, `doing`, `done` (shown as Complete).
+`todo`, `doing`, `done` (shown as Todo, Doing, Done in task detail).
 
 ## Development
 
@@ -76,4 +76,4 @@ In this development environment the installed Maki 0.5.7 CLI confirmed registrat
 
 ## MVP limitations
 
-The UI is read-only. There is no subagent tracking, execution hooks, delete operation, or concurrent write protection. There are no additional task fields, UI editing, or backend service. The window keeps a fixed height of 20 content rows (bounded by the terminal), pins the column heading, and scrolls a taller board instead of growing.
+The UI is read-only. UI editing is not implemented yet. There is no subagent tracking, execution hooks, delete operation, or concurrent write protection. There are no additional task fields or backend service.

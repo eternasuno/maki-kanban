@@ -114,6 +114,11 @@ local function board(ids)
   for _, id in ipairs(ids) do tasks[id] = { title = "Title " .. id, description = "secret description", status = "todo" } end
   return { tasks = tasks }
 end
+local function snapshot()
+  local lines = {}
+  for _, line in ipairs(last_buf.lines) do lines[#lines + 1] = text(line) end
+  return table.concat(lines, "\n")
+end
 
 fake.result = { tasks = {
   ["task-1"] = { title = "One", description = "hidden", status = "todo" },
@@ -192,5 +197,107 @@ for _, line in ipairs(last_buf.lines) do threshold_text[#threshold_text + 1] = t
 local threshold_joined = table.concat(threshold_text, "\n")
 check(threshold_joined:find("[1] TODO", 1, true) and threshold_joined:find("[2] DOING", 1, true) and threshold_joined:find("[3] DONE", 1, true), "60 pane content cells render all three panes")
 check(text(last_buf.lines[2]):find("[2] DOING", 1, true) ~= nil, "digit 2 switches focus at the threshold")
+fake.result = { tasks = {
+  ["task-1"] = { title = "A long detail title that wraps across two lines", description = "first line\n\n" .. string.rep("long description words ", 300), status = "doing" },
+} }
+local observed = {}
+run({
+  { type = "key", key = "2" },
+  { type = "key", key = "<CR>" },
+  function() observed.detail = snapshot() end,
+  { type = "key", key = "j" },
+  function() observed.j = snapshot() end,
+  { type = "key", key = "<Down>" },
+  function() observed.down = snapshot() end,
+  { type = "key", key = "<PageDown>" },
+  function() observed.page_down = snapshot() end,
+  { type = "key", key = "G" },
+  function() observed.bottom = snapshot() end,
+  { type = "key", key = "<PageUp>" },
+  function() observed.page_up = snapshot() end,
+  { type = "key", key = "k" },
+  function() observed.k = snapshot() end,
+  { type = "key", key = "<Up>" },
+  function() observed.up = snapshot() end,
+  { type = "key", key = "g" },
+  function() observed.top = snapshot() end,
+  { type = "key", key = "b" },
+  function() observed.back = snapshot() end,
+  { type = "key", key = "q" },
+})
+check(observed.detail:find("A long detail title", 1, true) and observed.detail:find("Doing", 1, true), "Enter opens detail with title and status")
+check(observed.detail:find("first line", 1, true) and observed.detail:find("┌", 1, true) and observed.detail:find("└", 1, true) and observed.detail:find("b Back", 1, true), "detail displays description and bordered back footer")
+check(observed.j ~= observed.detail and observed.down ~= observed.j and observed.page_down ~= observed.down and observed.bottom ~= observed.page_down, "j, Down, PageDown and G advance description viewport")
+check(observed.page_up ~= observed.bottom and observed.k ~= observed.page_up and observed.up ~= observed.k and observed.top ~= observed.up, "g, PageUp, k and Up navigate description viewport")
+check(observed.back:find("[1] TODO", 1, true) and observed.back:find("A long detail title", 1, true), "b restores board focus and selected task")
+
+fake.result = { tasks = { ["task-1"] = { title = "待辦標題 that is far too long", description = "", status = "done" } } }
+observed = {}
+run({
+  function() observed.board = snapshot() end,
+  { type = "key", key = "3" },
+  { type = "key", key = "<Enter>" },
+  function() observed.detail = snapshot() end,
+  function() TERM = { cols = 24, rows = 12 } end,
+  { type = "resize", width = 20, height = 10 },
+  function() observed.resize = snapshot() end,
+  { type = "key", key = "b" },
+  { type = "key", key = "q" },
+})
+check(observed.detail:find("Done", 1, true) and observed.resize:find("Done", 1, true) and not observed.resize:find("A long detail", 1, true), "status rendering and resize rewrap detail title")
+check(#last_buf.lines == 10 and last_win.closed, "detail resize preserves view geometry and q closes")
+
+fake.result = { tasks = {} }
+run({ { type = "key", key = "<CR>" }, { type = "key", key = "q" } })
+check(text(last_buf.lines[2]):find("TODO", 1, true) ~= nil, "Enter on empty selection remains on board")
+run({ { type = "key", key = "<Esc>" } })
+check(last_win.closed, "Esc closes from board view")
+
+local Task = require("kanban.ui.task")
+local Board = require("kanban.ui.board")
+local function row(lines, i) return text(lines[i]) end
+local detail = Task.new({ title = "Short", status = "todo", description = "one\ntwo" }, 16, 12)
+local detail_lines = detail:render()
+check(row(detail_lines, 2):find("Short", 1, true) ~= nil and row(detail_lines, 3) == "│" .. string.rep(" ", 14) .. "│", "single-line title reserves second row")
+check(row(detail_lines, 4) == "├" .. string.rep("─", 14) .. "┤" and row(detail_lines, 5):find("Todo", 1, true) ~= nil, "separator and Todo label")
+check(row(detail_lines, 6) == "│" .. string.rep(" ", 14) .. "│" and row(detail_lines, 7):find("one", 1, true) and row(detail_lines, 8):find("two", 1, true), "description follows blank spacer and preserves newlines")
+check(row(detail_lines, 11) == "│" .. string.rep(" ", 8) .. "b Back│" and row(detail_lines, 12) == "└" .. string.rep("─", 14) .. "┘", "right-aligned fixed footer and bottom border")
+check(detail_lines[5][2][2].fg == "#7799ff", "todo status uses accent color")
+
+local cjk = Task.new({ title = "中文中文中文中文中文中文中文", status = "doing", description = "你好世界你好世界" }, 10, 11)
+local cjk_lines = cjk:render()
+check(row(cjk_lines, 2):find("中文中文", 1, true) and row(cjk_lines, 3):find("…", 1, true) and not row(cjk_lines, 4):find("中文", 1, true), "CJK title wraps into at most two truncated rows")
+check(row(cjk_lines, 7):find("你好世界", 1, true) and row(cjk_lines, 8):find("你好世界", 1, true), "CJK description wraps at display width")
+check(cjk_lines[5][2][2].fg == "#ffaa00", "doing status uses warning color")
+for _, line in ipairs(cjk_lines) do check(width(text(line)) == 10, "CJK detail row fits exact width") end
+local done = Task.new({ title = "Done task", status = "done", description = "" }, 12, 10)
+check(row(done:render(), 5):find("Done", 1, true) and done:render()[5][2][2].fg == "#00cc66", "done status uses success color")
+check(not row(done:render(), 7):find("empty", 1, true), "empty description has no placeholder")
+local long = Task.new({ title = "Scrolling", status = "todo", description = table.concat({ "a", "b", "c", "d", "e", "f", "g", "h", "i", "j" }, "\n") }, 12, 10)
+check(row(long:render(), 7):find("a", 1, true) ~= nil, "description begins at top")
+check(long:handle_key("G") and row(long:render(), 7):find("j", 1, true) == nil and row(long:render(), 8):find("j", 1, true) ~= nil, "G reaches last description page")
+long:resize(12, 13)
+check(row(long:render(), 7):find("f", 1, true) ~= nil, "resize clamps description offset")
+check(long:handle_key("b") == "back" and long:handle_key("q") == false and long:handle_key("<Esc>") == false, "detail only handles back, not global close keys")
+
+fake.result = board({ "task-1", "task-2", "task-3", "task-4", "task-5", "task-6", "task-7", "task-8", "task-9", "task-10" })
+local retained = Board.new(90, 8)
+retained:reload(fake)
+retained:handle_key("j", fake)
+retained:handle_key("j", fake)
+retained:handle_key("j", fake)
+retained:handle_key("j", fake)
+local selected_before = retained:selected_task()
+local before = row(retained:render(), 3)
+retained:handle_key("2", fake)
+retained:handle_key("1", fake)
+check(retained:selected_task() == selected_before and row(retained:render(), 3) == before, "board preserves selection and scroll offset across focus change")
+
+for _, key in ipairs({ "q", "<Esc>" }) do
+  fake.result = { tasks = { ["task-1"] = { title = "Open detail", description = "text", status = "todo" } } }
+  run({ { type = "key", key = "<CR>" }, { type = "key", key = key } })
+  check(last_win.closed and snapshot():find("Open detail", 1, true) and snapshot():find("b Back", 1, true), key .. " closes from detail without going back")
+end
+
 print(string.format("%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end
