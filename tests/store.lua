@@ -548,7 +548,39 @@ local function test_persistence_failure()
   ok(s:delete_many({ "task-1", "task-2" }), "write recovers")
 end
 
+local function test_tool_registration()
+  local registered = {}
+  local function check_schema(schema)
+    if schema.type == "object" then
+      assert(type(schema.properties) == "table", "object schema missing properties")
+      for _, property in pairs(schema.properties) do
+        check_schema(property)
+      end
+      if type(schema.additionalProperties) == "table" then
+        check_schema(schema.additionalProperties)
+      end
+    elseif schema.type == "array" then
+      check_schema(schema.items)
+    end
+  end
+  maki.api = {
+    register_tool = function(spec)
+      check_schema(spec.schema)
+      registered[spec.name] = spec
+    end,
+  }
+  require("kanban.tools").register()
+  for _, name in ipairs({ "task_list", "task_get", "task_create", "task_update", "task_delete" }) do
+    ok(registered[name] ~= nil, name .. " registers")
+  end
+  local tasks = registered.task_update.schema.properties.tasks
+  eq(tasks.minProperties, 1, "update requires at least one task")
+  eq(tasks.additionalProperties.minProperties, 1, "update requires non-empty patches")
+  ok(tasks.additionalProperties.properties.status ~= nil, "update accepts status patches")
+end
+
 local tests = {
+  test_tool_registration,
   test_missing,
   test_success,
   test_rejected,

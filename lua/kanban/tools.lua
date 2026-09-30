@@ -120,6 +120,7 @@ function M.register()
       properties = {
         tasks = {
           type = "object",
+          properties = {},
           minProperties = 1,
           additionalProperties = {
             type = "object",
