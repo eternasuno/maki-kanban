@@ -68,6 +68,7 @@ local editor = { files = {}, writes = {}, reads = {}, removes = {}, exit_code = 
 local function editor_write(path, value)
   editor.writes[#editor.writes + 1] = path
   editor.files[path] = value
+  if editor.write_error then return nil, editor.write_error end
   return true
 end
 local function editor_read(path)
@@ -89,8 +90,12 @@ _G.maki = { env = { state_dir = function() return "/tmp" end }, fs = {
   terminal_size = function() return { cols = TERM.cols, rows = TERM.rows } end,
   display_width = width,
   truncate_text = truncate,
-  theme_color = function(name) return ({ background = "#101010", foreground = "#eeeeee", accent = "#7799ff", warning = "#ffaa00", success = "#00cc66", error = "#ff4444" })[name] end,
-  theme_style = function(name) return name == "item_selected" and { bg = "#7799ff", fg = "#101010" } or {} end,
+  theme_color = function(name) return ({ background = "#101010", foreground = "#eeeeee" })[name] end,
+  theme_style = function(name)
+    if name == "item_selected" then return { bg = "#7799ff", fg = "#101010" } end
+    local color = ({ accent = "#7799ff", warning = "#ffaa00", success = "#00cc66", error = "#ff4444", foreground = "#eeeeee" })[name]
+    if color then return { fg = color } end
+  end,
   buf = function() return make_buf() end,
   open_editor = function(path)
     editor.editor_path = path
@@ -288,50 +293,42 @@ fake.result = { tasks = {
 } }
 local observed = {}
 run({
-  { type = "key", key = "l" },
-  { type = "key", key = "<CR>" },
+  { type = "key", key = "l" }, { type = "key", key = "<CR>" },
   function() observed.detail = snapshot() end,
-  { type = "key", key = "j" },
-  function() observed.j = snapshot() end,
-  { type = "key", key = "<Down>" },
-  function() observed.down = snapshot() end,
-  { type = "key", key = "<PageDown>" },
-  function() observed.page_down = snapshot() end,
-  { type = "key", key = "G" },
-  function() observed.bottom = snapshot() end,
-  { type = "key", key = "<PageUp>" },
-  function() observed.page_up = snapshot() end,
-  { type = "key", key = "k" },
-  function() observed.k = snapshot() end,
-  { type = "key", key = "<Up>" },
-  function() observed.up = snapshot() end,
-  { type = "key", key = "g" },
-  function() observed.top = snapshot() end,
-  { type = "key", key = "b" },
-  function() observed.back = snapshot() end,
+  { type = "key", key = "j" }, function() observed.j = snapshot() end,
+  { type = "key", key = "<Down>" }, function() observed.down = snapshot() end,
+  { type = "key", key = "J" }, function() observed.scroll = snapshot() end,
+  { type = "key", key = "<PageDown>" }, function() observed.page_down = snapshot() end,
+  { type = "key", key = "G" }, function() observed.bottom = snapshot() end,
+  { type = "key", key = "<PageUp>" }, function() observed.page_up = snapshot() end,
+  { type = "key", key = "K" }, function() observed.k = snapshot() end,
+  { type = "key", key = "g" }, function() observed.top = snapshot() end,
+  { type = "key", key = "<Esc>" }, function() observed.back = snapshot() end,
   { type = "key", key = "q" },
 })
-check(observed.detail:find("A long detail title", 1, true) and observed.detail:find("Doing", 1, true), "Enter opens detail with title and status")
-check(observed.detail:find("first line", 1, true) and observed.detail:find("┌", 1, true) and observed.detail:find("└", 1, true) and observed.detail:find("b Back", 1, true), "detail displays description and bordered back footer")
-check(observed.j ~= observed.detail and observed.down ~= observed.j and observed.page_down ~= observed.down and observed.bottom ~= observed.page_down, "j, Down, PageDown and G advance description viewport")
-check(observed.page_up ~= observed.bottom and observed.k ~= observed.page_up and observed.up ~= observed.k and observed.top ~= observed.up, "g, PageUp, k and Up navigate description viewport")
-check(observed.back:find("TODO", 1, true) and observed.back:find("A long detail title", 1, true), "b restores board focus and selected task")
+check(observed.detail:find("A long detail title", 1, true) and not observed.detail:find("Doing", 1, true), "Enter opens detail with title but no status text")
+check(observed.detail:find("first line", 1, true) and observed.detail:find("┌", 1, true) and observed.detail:find("└", 1, true) and observed.detail:find("Esc back", 1, true), "detail displays description and bordered back footer")
+check(observed.j:find("▸ Description", 1, true) and observed.j:find("first line", 1, true) and observed.down == observed.detail, "j and Down wrap field focus without scrolling")
+check(observed.scroll ~= observed.down and observed.page_down ~= observed.scroll and observed.bottom ~= observed.page_down, "J, PageDown and G advance description viewport")
+check(observed.page_up ~= observed.bottom and observed.k ~= observed.page_up and observed.top == observed.detail, "PageUp, K and g navigate viewport independently of focus")
+check(observed.back:find("DOING · 1", 1, true) and observed.back:find("▸ A long detail title", 1, true), "Esc restores board focus and selected task")
 
 fake.result = { tasks = { ["task-1"] = { title = "待辦標題 that is far too long", description = "", status = "done" } } }
 observed = {}
 run({
-  function() observed.board = snapshot() end,
-  { type = "key", key = "h" },
-  { type = "key", key = "<Enter>" },
+  { type = "key", key = "h" }, { type = "key", key = "<Enter>" },
   function() observed.detail = snapshot() end,
-  function() TERM = { cols = 24, rows = 12 } end,
   { type = "resize", width = 20, height = 10 },
-  function() observed.resize = snapshot() end,
-  { type = "key", key = "b" },
+  function()
+    observed.resize = snapshot()
+    check(#last_buf.lines == 10 and not last_win.closed, "detail resize keeps view open with exact height")
+    for _, line in ipairs(last_buf.lines) do check(width(text(line)) == 20, "resized detail fits exact width") end
+  end,
+  { type = "key", key = "<Esc>" }, function() observed.back = snapshot() end,
   { type = "key", key = "q" },
 })
-check(observed.detail:find("Done", 1, true) and observed.resize:find("Done", 1, true) and not observed.resize:find("A long detail", 1, true), "status rendering and resize rewrap detail title")
-check(#last_buf.lines == 10 and last_win.closed, "detail resize preserves view geometry and q closes")
+check(observed.detail:find("待辦標題", 1, true) and observed.resize:find("待辦標題", 1, true) and observed.detail ~= observed.resize and not observed.resize:find("Done", 1, true), "resize rewraps CJK title without status label")
+check(observed.back:find("DONE · 1", 1, true) and last_win.closed, "detail back retains done-column focus after resize")
 
 fake.result = { tasks = {} }
 run({ { type = "key", key = "<CR>" }, { type = "key", key = "q" } })
@@ -344,27 +341,36 @@ local Board = require("kanban.ui.board")
 local function row(lines, i) return text(lines[i]) end
 local detail = Task.new({ title = "Short", status = "todo", description = "one\ntwo" }, 16, 12)
 local detail_lines = detail:render()
-check(row(detail_lines, 2):find("Short", 1, true) ~= nil and row(detail_lines, 3) == "│" .. string.rep(" ", 14) .. "│", "single-line title reserves second row")
-check(row(detail_lines, 4) == "├" .. string.rep("─", 14) .. "┤" and row(detail_lines, 5):find("Todo", 1, true) ~= nil, "separator and Todo label")
-check(row(detail_lines, 6) == "│" .. string.rep(" ", 14) .. "│" and row(detail_lines, 7):find("one", 1, true) and row(detail_lines, 8):find("two", 1, true), "description follows blank spacer and preserves newlines")
-check(width(row(detail_lines, 11)) == 16 and row(detail_lines, 12) == "└" .. string.rep("─", 14) .. "┘", "detail footer and bottom border")
-check(detail_lines[5][2][2].fg == "#7799ff", "todo status uses accent color")
+check(row(detail_lines, 2):find("▸ Short", 1, true) and row(detail_lines, 3) == "│" .. string.rep(" ", 14) .. "│", "single-line title reserves second row")
+check(row(detail_lines, 4) == "│" .. string.rep(" ", 14) .. "│" and row(detail_lines, 5):find("Description", 1, true), "description label follows blank field gap without status row")
+check(row(detail_lines, 6):find("one", 1, true) and row(detail_lines, 7):find("two", 1, true) and row(detail_lines, 8) == "└" .. string.rep("─", 14) .. "┘", "description preserves newlines within pane")
+check(row(detail_lines, 9) == string.rep(" ", 16) and row(detail_lines, 10) == "┌" .. string.rep("─", 14) .. "┐" and width(row(detail_lines, 11)) == 16 and row(detail_lines, 12) == "└" .. string.rep("─", 14) .. "┘", "detail reserves blank gap and three-row bordered footer")
 
-local cjk = Task.new({ title = "中文中文中文中文中文中文中文", status = "doing", description = "你好世界你好世界" }, 10, 11)
+for _, status in ipairs({ { "todo", "#7799ff" }, { "doing", "#ffaa00" }, { "done", "#00cc66" } }) do
+  local colored = Task.new({ title = "Color task", status = status[1], description = "body" }, 30, 12)
+  local lines = colored:render()
+  check(lines[1][1][2].fg == status[2] and lines[8][1][2].fg == status[2] and lines[2][1][2].fg == status[2] and lines[2][3][2].fg == status[2], status[1] .. " colors top bottom and side borders")
+  check(lines[2][2][2].fg == "#eeeeee" and lines[2][2][2].bold and not lines[5][2][2].bold, "focused title is bold foreground without status coloring")
+  for _, line in ipairs(lines) do
+    if type(line) == "table" then
+      for _, span in ipairs(line) do check(not span[2].bg, "detail has no background highlighting") end
+    end
+    check(not text(line):find("Todo", 1, true) and not text(line):find("Doing", 1, true) and not text(line):find("Done", 1, true), "detail omits status text")
+  end
+end
+local cjk = Task.new({ title = "中文中文中文中文中文中文中文", status = "doing", description = "你好世界你好世界" }, 12, 13)
 local cjk_lines = cjk:render()
 check(row(cjk_lines, 2):find("中文中文", 1, true) and row(cjk_lines, 3):find("…", 1, true) and not row(cjk_lines, 4):find("中文", 1, true), "CJK title wraps into at most two truncated rows")
-check(row(cjk_lines, 7):find("你好世界", 1, true) and row(cjk_lines, 8):find("你好世界", 1, true), "CJK description wraps at display width")
-check(cjk_lines[5][2][2].fg == "#ffaa00", "doing status uses warning color")
-for _, line in ipairs(cjk_lines) do check(width(text(line)) == 10, "CJK detail row fits exact width") end
-local done = Task.new({ title = "Done task", status = "done", description = "" }, 12, 10)
-check(row(done:render(), 5):find("Done", 1, true) and done:render()[5][2][2].fg == "#00cc66", "done status uses success color")
-check(not row(done:render(), 7):find("empty", 1, true), "empty description has no placeholder")
-local long = Task.new({ title = "Scrolling", status = "todo", description = table.concat({ "a", "b", "c", "d", "e", "f", "g", "h", "i", "j" }, "\n") }, 12, 10)
-check(row(long:render(), 7):find("a", 1, true) ~= nil, "description begins at top")
-check(long:handle_key("G") and row(long:render(), 7):find("j", 1, true) == nil and row(long:render(), 8):find("j", 1, true) ~= nil, "G reaches last description page")
-long:resize(12, 13)
-check(row(long:render(), 7):find("f", 1, true) ~= nil, "resize clamps description offset")
-check(long:handle_key("b") == "back" and long:handle_key("q") == false and long:handle_key("<Esc>") == false, "detail only handles back, not global close keys")
+check(row(cjk_lines, 6):find("你好世界", 1, true) and row(cjk_lines, 7):find("你好世界", 1, true), "CJK description wraps at display width after marker gutter")
+for _, line in ipairs(cjk_lines) do check(width(text(line)) == 12, "CJK detail row fits exact width") end
+local done = Task.new({ title = "Finished task", status = "done", description = "" }, 12, 12)
+check(row(done:render(), 6) == "│" .. string.rep(" ", 10) .. "│", "empty description has no placeholder")
+local long = Task.new({ title = "Scrolling", status = "todo", description = table.concat({ "a", "b", "c", "d", "e", "f", "g", "h", "i", "j" }, "\n") }, 12, 12)
+check(long.viewport == 2 and row(long:render(), 6):find("a", 1, true), "description begins at top with height-minus-ten viewport")
+check(long:handle_key("G") and long.offset == 8 and row(long:render(), 6):find("i", 1, true) and row(long:render(), 7):find("j", 1, true), "G reaches exact final description page")
+long:resize(12, 15)
+check(long.viewport == 5 and long.offset == 5 and row(long:render(), 6):find("f", 1, true), "resize clamps description offset")
+check(long:handle_key("<Esc>") == "back" and long:handle_key("q") == "quit" and long:handle_key("<C-c>") == "quit" and long:handle_key("b") == false, "detail handles back and quit with legacy b ignored")
 
 fake.result = board({ "task-1", "task-2", "task-3", "task-4", "task-5", "task-6", "task-7", "task-8", "task-9", "task-10" })
 local retained = Board.new(90, 8)
@@ -398,15 +404,23 @@ fake.result = { tasks = {} }
 by_id:reload(fake)
 check(by_id:selected_task() == nil and by_id._state.offsets[1] == 0, "empty reload clamps selection and offset")
 
-for _, key in ipairs({ "q", "<Esc>" }) do
+for _, key in ipairs({ "q", "<C-c>" }) do
   fake.result = { tasks = { ["task-1"] = { title = "Open detail", description = "text", status = "todo" } } }
-  run({ { type = "key", key = "<CR>" }, { type = "key", key = key } })
-  check(last_win.closed and snapshot():find("Open detail", 1, true) and snapshot():find("b Back", 1, true), key .. " closes from detail without going back")
+  local reached = false
+  run({ { type = "key", key = "<CR>" },
+    function() check(snapshot():find("─ Task", 1, true) and snapshot():find("Open detail", 1, true) and not last_win.closed, "detail is open before quit") end,
+    { type = "key", key = key }, function() reached = true end,
+  })
+  check(last_win.closed and not reached and snapshot():find("Esc back", 1, true), key .. " closes detail immediately without returning to board")
 end
 
 local edit_task = { id = "task-1", title = "abc", description = "old", status = "todo" }
 local edit = Task.new(edit_task, 30, 12)
-check(edit.focused_field == "title" and edit:handle_key("<Tab>", fake) and edit.focused_field == "status" and edit:handle_key("<Tab>", fake) and edit.focused_field == "description" and edit:handle_key("<S-Tab>", fake) and edit.focused_field == "status", "focus tabs cycle in both directions")
+for _, key in ipairs({ "j", "k", "<Down>", "<Up>", "<Tab>", "<S-Tab>" }) do
+  edit.focused_field, edit.offset = "title", 0
+  check(edit:handle_key(key, fake) and edit.focused_field == "description" and edit.offset == 0, key .. " selects description without scrolling")
+  check(edit:handle_key(key, fake) and edit.focused_field == "title" and edit.offset == 0, key .. " wraps to title without scrolling")
+end
 edit.focused_field = "title"
 fake.result = { tasks = { ["task-1"] = { title = "abc", description = "old", status = "todo" } } }
 fake.update_error = nil
@@ -414,23 +428,42 @@ check(edit:handle_key("<CR>", fake) and edit.editing == "title", "Enter begins t
 check(edit:handle_key("<Left>", fake) and edit:handle_key("<BS>", fake) and edit:handle_paste("x\ny") and edit.title_draft == "ax yc", "title cursor editing and newline paste")
 check(edit:handle_key("<Esc>", fake) and edit.task.title == "abc" and not edit.editing, "title cancel discards draft")
 edit:handle_key("<CR>", fake); edit:handle_paste("new"); fake.update_error = "no title write"
-check(edit:handle_key("<Enter>", fake) and edit.editing == "title" and edit.error == "no title write", "title update failure keeps editing and error")
+check(edit:handle_key("<Enter>", fake) and edit.editing == "title" and edit.error == "no title write" and edit.title_input:value() == "abcnew" and edit.task.title == "abc", "title update failure keeps editing and error")
 fake.update_error = nil; edit:handle_key("<Esc>", fake)
 edit:handle_key("<CR>", fake)
 for _ = 1, 3 do edit:handle_key("<BS>", fake) end
 check(edit:handle_key("<CR>", fake) and edit.editing == "title" and edit.title_input:value() == "" and edit.error == "title must not be empty" and edit.task.title == "abc", "empty title save fails without losing input")
 edit:handle_key("<Esc>", fake)
 
-edit.focused_field = "status"
 edit:handle_key("<CR>", fake)
-check(edit.status_draft == "todo" and edit:handle_key("l", fake) and edit.status_draft == "doing" and edit:handle_key("<Right>", fake) and edit.status_draft == "done", "status cycles left/right")
+local literal_updates = #fake.updates
+check(edit:handle_key("q", fake) and edit.title_input:value() == "abcq" and edit.editing == "title" and #fake.updates == literal_updates, "q is literal text during title editing")
+check(edit:handle_key("<Enter>", fake) == "changed" and edit.task.title == "abcq" and not edit.editing and #fake.updates == literal_updates + 1, "Enter saves title and exits editing")
+edit:handle_key("<CR>", fake)
+check(edit:handle_key("<C-c>", fake) == "quit" and #fake.updates == literal_updates + 1, "Ctrl-C quits title editing without saving")
+edit:handle_key("<Esc>", fake)
+edit.focused_field = "description"
+local status_updates = #fake.updates
+check(edit:handle_key("<", fake) == true and #fake.updates == status_updates and edit.task.status == "todo", "detail lower status boundary is a no-op")
+for _, move in ipairs({ { ">", "doing" }, { ">", "done" }, { "<", "doing" }, { "<", "todo" } }) do
+  check(edit:handle_key(move[1], fake) == "changed" and edit.task.status == move[2] and edit.focused_field == "description" and not edit.editing, "detail status changes immediately without changing focus")
+  local update, fields = fake.updates[#fake.updates], 0
+  for _ in pairs(update.patch) do fields = fields + 1 end
+  check(update.id == "task-1" and fields == 1 and update.patch.status == move[2], "detail status sends status-only patch")
+  if move[2] == "done" then
+    local count = #fake.updates
+    check(edit:handle_key(">", fake) == true and #fake.updates == count and edit.task.status == "done", "detail upper status boundary does not wrap")
+  end
+end
 fake.update_error = "status failed"
-check(edit:handle_key("<CR>", fake) and edit.error == "status failed" and edit.editing == "status", "status update failure keeps draft")
-edit:handle_key("<Esc>", fake); fake.update_error = nil
+local old_task, old_focus, old_offset = edit.task, edit.focused_field, edit.offset
+check(edit:handle_key(">", fake) == true and edit.error == "status failed" and edit.task == old_task and edit.task.status == "todo" and edit.focused_field == old_focus and edit.offset == old_offset and not edit.editing, "status failure preserves task focus and viewport")
+check(row(edit:render(), 11):find("Error: status failed", 1, true), "status failure renders prefixed footer error")
+fake.update_error = nil
 
 local function reset_editor()
   editor.files, editor.writes, editor.reads, editor.removes = {}, {}, {}, {}
-  editor.exit_code, editor.read_error, editor.editor_path = 0, nil, nil
+  editor.exit_code, editor.write_error, editor.read_error, editor.editor_path = 0, nil, nil, nil
 end
 reset_editor()
 edit.focused_field = "description"
@@ -439,7 +472,7 @@ maki.ui.open_editor = function(path) editor.editor_path = path; editor.files[pat
 check(edit:handle_key("<CR>", fake) == "changed" and edit.task.description == "updated" and #fake.updates > 0, "description success reads and partially updates")
 maki.ui.open_editor = description_open
 reset_editor(); editor.exit_code = 1
-check(edit:handle_key("<CR>", fake) and #editor.removes == 1 and edit.task.description == "updated", "description cancel/nonzero removes temporary file")
+check(edit:handle_key("<CR>", fake) and #editor.removes == 1 and #editor.reads == 0 and edit.task.description == "updated" and edit.error == "editor exited with status 1", "description nonzero exit reports error without reading and removes temporary file")
 reset_editor(); editor.exit_code = 0; editor.read_error = "read failed"
 check(edit:handle_key("<CR>", fake) and edit.error == "read failed" and #editor.removes == 1, "description read failure is rendered and cleaned up")
 reset_editor(); editor.exit_code = 0; fake.update_error = "description failed"
@@ -448,13 +481,32 @@ maki.ui.open_editor = function(path) editor.editor_path = path; editor.files[pat
 check(edit:handle_key("<CR>", fake) and edit.error == "description failed" and #editor.removes == 1, "description update failure is retained and cleaned up")
 maki.ui.open_editor, fake.update_error = old_open_editor, nil
 
+reset_editor()
+editor.write_error = "write failed"
+local editor_updates, editor_task = #fake.updates, edit.task
+check(edit:handle_key("<CR>", fake) == true and edit.error == "write failed" and edit.task == editor_task and edit.task.description == "updated", "description temporary write failure preserves task and reports error")
+check(#editor.writes == 1 and #editor.removes == 1 and editor.removes[1] == editor.writes[1] and next(editor.files) == nil, "description temporary write failure removes partially written file")
+check(editor.editor_path == nil and #editor.reads == 0 and #fake.updates == editor_updates and edit.focused_field == "description" and not edit.editing, "description temporary write failure skips editor read and Store update")
+check(row(edit:render(), 11):find("Error: write failed", 1, true), "description temporary write failure renders footer error")
+reset_editor()
+check(edit:handle_key("<CR>", fake) == true and edit.error == nil and edit.task == editor_task and edit.task.description == "updated" and #fake.updates == editor_updates, "successful unchanged description clears error without replacing task or updating Store")
+check(#editor.writes == 1 and editor.editor_path == editor.writes[1] and #editor.reads == 1 and editor.reads[1] == editor.editor_path, "unchanged description opens editor and reads original content")
+check(#editor.removes == 1 and editor.removes[1] == editor.editor_path and next(editor.files) == nil and edit.focused_field == "description" and not edit.editing, "unchanged description cleans temporary file and retains field selection")
+reset_editor()
+
 fake.result = { tasks = { ["task-1"] = { title = "Before", description = "d", status = "todo" } } }
 local calls_before = fake.calls
-run({ { type = "key", key = "<CR>" }, { type = "key", key = "<CR>" }, { type = "key", key = "<End>" }, { type = "key", key = "X" }, { type = "key", key = "<CR>" }, { type = "key", key = "b" }, { type = "key", key = "q" } })
-check(fake.result.tasks["task-1"].title == "BeforeX" and fake.calls == calls_before + 2 and snapshot():find("BeforeX", 1, true), "title save reloads board card")
+run({ { type = "key", key = "<CR>" }, { type = "key", key = "<CR>" }, { type = "key", key = "<End>" }, { type = "key", key = "X" }, { type = "key", key = "<CR>" }, { type = "key", key = "<Esc>" }, { type = "key", key = "q" } })
+check(fake.result.tasks["task-1"].title == "BeforeX" and fake.calls == calls_before + 3 and snapshot():find("BeforeX", 1, true), "title save reloads board card")
 
 fake.result = { tasks = { ["task-1"] = { title = "Moving", description = "d", status = "todo" } } }
-run({ { type = "key", key = "<CR>" }, { type = "key", key = "<Tab>" }, { type = "key", key = "<CR>" }, { type = "key", key = "l" }, { type = "key", key = "<CR>" }, { type = "key", key = "b" }, { type = "key", key = "q" } })
+observed = {}
+run({ { type = "key", key = "<CR>" }, { type = "key", key = ">" },
+  function() observed.moved = snapshot(); check(last_buf.lines[1][1][2].fg == "#ffaa00" and not last_win.closed, "detail status change immediately recolors border") end,
+  { type = "key", key = "<Esc>" }, function() observed.board = snapshot() end,
+  { type = "key", key = "q" },
+})
+check(observed.moved:find("─ Task", 1, true) and observed.moved:find("Moving", 1, true) and observed.board:find("▸ Moving", 1, true), "status change stays detail then back selects moved ID")
 check(fake.result.tasks["task-1"].status == "doing" and snapshot():find("DOING · 1", 1, true) and snapshot():find("TODO · 0", 1, true), "status save moves board card")
 
 fake.result = { tasks = { ["task-1"] = { title = "Description", description = "original", status = "todo" } } }
@@ -466,8 +518,8 @@ maki.ui.open_editor = function(path)
   return 0
 end
 calls_before = fake.calls
-run({ { type = "key", key = "<CR>" }, { type = "key", key = "<Tab>" }, { type = "key", key = "<Tab>" }, { type = "key", key = "<CR>" }, { type = "key", key = "b" }, { type = "key", key = "q" } })
-check(opened_path and fake.result.tasks["task-1"].description == "edited\nline" and fake.calls == calls_before + 2 and not editor.files[opened_path], "description save refreshes board cache and removes temp file")
+run({ { type = "key", key = "<CR>" }, { type = "key", key = "<Tab>" }, { type = "key", key = "<CR>" }, { type = "key", key = "<Esc>" }, { type = "key", key = "q" } })
+check(opened_path and fake.result.tasks["task-1"].description == "edited\nline" and fake.calls == calls_before + 3 and not editor.files[opened_path], "description save refreshes board cache and removes temp file")
 maki.ui.open_editor = description_open
 
 local create_task = Task.new_create(30, 12)
@@ -479,14 +531,23 @@ check(create_task:handle_key("<Enter>", fake) and create_task.task.title == "新
 create_task:handle_key("<Tab>", fake)
 check(create_task.focused_field == "description", "creation tabs from title to description")
 create_task:handle_key("<Tab>", fake)
-check(create_task.focused_field == "create", "creation tabs to create action")
+check(create_task.focused_field == "title", "creation tabs wrap to title with no create field")
 
 fake.result = { tasks = { ["task-1"] = { title = "Existing", description = "", status = "todo" }, ["task-3"] = { title = "Gap", description = "", status = "todo" } } }
 fake.create_error = nil
 local create_calls = fake.creates or 0
-run({ { type = "key", key = "n" }, { type = "paste", text = "ignored" }, { type = "key", key = "<Enter>" }, { type = "paste", text = "新" }, { type = "key", key = "<Enter>" }, { type = "key", key = "<Tab>" }, { type = "key", key = "<Tab>" }, { type = "key", key = "<Enter>" }, { type = "key", key = "q" } })
-check(fake.creates == create_calls + 1 and fake.result.tasks["task-2"].title == "新", "n creates title-only CJK task")
-check(snapshot():find("新", 1, true) and snapshot():find("TODO · 3", 1, true), "creation reloads TODO board and selects created task ID")
+observed = {}
+run({ { type = "key", key = "n" }, { type = "paste", text = "ignored" }, { type = "key", key = "<Enter>" }, { type = "paste", text = "新" }, { type = "key", key = "<Enter>" },
+  function() check((fake.creates or 0) == create_calls and snapshot():find("CREATE", 1, true), "Enter commits title draft but never creates") end,
+  { type = "key", key = "s" },
+  function() observed.created = snapshot(); check(last_buf.lines[1][1][2].fg == "#7799ff" and not last_win.closed, "created task opens todo detail") end,
+  { type = "key", key = ">" }, function() observed.moved = snapshot() end,
+  { type = "key", key = "<Esc>" }, function() observed.board = snapshot() end,
+  { type = "key", key = "q" },
+})
+check(fake.creates == create_calls + 1 and fake.result.tasks["task-2"].title == "新" and fake.create_inputs[#fake.create_inputs].description == "", "n and s create title-only CJK task")
+check(observed.created:find("─ Task", 1, true) and not observed.created:find("CREATE", 1, true) and observed.moved:find("新", 1, true) and fake.result.tasks["task-2"].status == "doing", "creation becomes Detail and immediately allows >")
+check(observed.board:find("DOING · 1", 1, true) and observed.board:find("▸ 新", 1, true), "back from created detail selects new ID in moved column")
 
 fake.result = board({ "task-1", "task-2", "task-3" })
 by_id:reload(fake)
@@ -540,13 +601,12 @@ run({
   { type = "paste", text = "With description" }, { type = "key", key = "<Enter>" },
   { type = "key", key = "<Tab>" }, { type = "key", key = "<Enter>" },
   function() check(fake.creates == description_creates and #fake.updates == updates_before, "description draft does not write Store before Create") end,
-  { type = "key", key = "<Tab>" }, { type = "key", key = "<Enter>" },
+  { type = "key", key = "s" },
   function() observed.selected = selected_title() end,
-  { type = "key", key = "<CR>" },
   function() observed.detail = snapshot() end,
   { type = "key", key = "q" },
 })
-check(observed.open:find("Create task (Todo)", 1, true) and observed.open:find("Esc Cancel", 1, true), "n opens create flow")
+check(observed.open:find("─ Create", 1, true) and observed.open:find("Esc back", 1, true), "n opens create flow")
 check(fake.result.tasks["task-2"].description == "first\n第二行" and fake.result.tasks["task-2"].status == "todo", "description creation stores draft and fixed TODO status")
 check(fake.calls == lists_before + 2 and observed.selected:find("With description", 1, true) and observed.detail:find("With description", 1, true), "creation reloads once, focuses TODO and opens selected new task")
 check(#editor.removes == 1 and next(editor.files) == nil, "create description removes temporary file")
@@ -560,8 +620,8 @@ for _, title in ipairs({ "", "   " }) do
   invalid:handle_key("<Tab>", fake)
   invalid:handle_key("<Tab>", fake)
   local attempts = fake.creates
-  check(invalid:handle_key("<CR>", fake) == true and fake.creates == attempts + 1 and invalid.error == "title must not be empty", "Store rejects empty/whitespace create title")
-  check(invalid.task.title == title and row(invalid:render(), 10):find("title must not be empty", 1, true), "invalid create retains input and renders Store error")
+  check(invalid:handle_key("s", fake) == true and fake.creates == attempts + 1 and invalid.error == "title must not be empty", "Store rejects empty/whitespace create title")
+  check(invalid.task.title == title and row(invalid:render(), 11):find("title must not be empty", 1, true), "invalid create retains input and renders Store error")
 end
 
 reset_editor()
@@ -574,10 +634,10 @@ maki.ui.open_editor = function(path) editor.files[path] = "Retained description"
 failed_create:handle_key("<CR>", fake)
 failed_create:handle_key("<Tab>", fake)
 fake.create_error = "write failed"
-check(failed_create:handle_key("<CR>", fake) == true and failed_create.creating and failed_create.task.title == "Retained title" and failed_create.task.description == "Retained description", "Store create failure keeps create UI and both drafts")
-check(row(failed_create:render(), 10):find("write failed", 1, true), "create failure displays error")
+check(failed_create:handle_key("s", fake) == true and failed_create.creating and failed_create.task.title == "Retained title" and failed_create.task.description == "Retained description", "Store create failure keeps create UI and both drafts")
+check(row(failed_create:render(), 11):find("write failed", 1, true), "create failure displays error")
 fake.create_error = nil
-check(failed_create:handle_key("<CR>", fake) == "created" and failed_create.task.status == "todo", "failed creation can retry successfully")
+check(failed_create:handle_key("s", fake) == "created" and failed_create.task.status == "todo", "failed creation can retry successfully")
 maki.ui.open_editor = description_open
 
 local cancel_creates = fake.creates
@@ -585,15 +645,15 @@ observed = {}
 run({ { type = "key", key = "n" }, { type = "key", key = "<Esc>" },
   function() observed.cancel_flow = snapshot() end, { type = "key", key = "q" },
 })
-check(fake.creates == cancel_creates and observed.cancel_flow:find("TODO", 1, true) and not observed.cancel_flow:find("Create task (Todo)", 1, true), "Esc exits field selection to board without creating")
+check(fake.creates == cancel_creates and observed.cancel_flow:find("TODO", 1, true) and not observed.cancel_flow:find("─ Create", 1, true), "Esc exits field selection to board without creating")
 
 run({ { type = "key", key = "n" }, { type = "key", key = "<Enter>" }, { type = "paste", text = "Cancel me" },
   { type = "key", key = "<Esc>" }, function() observed.cancel_edit = snapshot() end,
   { type = "key", key = "<Esc>" }, function() observed.cancel_flow = snapshot() end,
   { type = "key", key = "q" },
 })
-check(fake.creates == cancel_creates and observed.cancel_edit:find("Create task (Todo)", 1, true) and not observed.cancel_edit:find("Cancel me", 1, true), "Esc cancels title draft without creating or leaving create view")
-check(observed.cancel_flow:find("TODO", 1, true) and not observed.cancel_flow:find("Create task (Todo)", 1, true), "second Esc exits creation to board")
+check(fake.creates == cancel_creates and observed.cancel_edit:find("─ Create", 1, true) and not observed.cancel_edit:find("Cancel me", 1, true), "Esc cancels title draft without creating or leaving create view")
+check(observed.cancel_flow:find("TODO", 1, true) and not observed.cancel_flow:find("─ Create", 1, true), "second Esc exits creation to board")
 
 local resized_create = Task.new_create(80, 12)
 resized_create:handle_key("<CR>", fake)
@@ -614,12 +674,12 @@ fake.create_error = "disk write failed"
 observed = {}
 run({ { type = "key", key = "n" }, { type = "paste", text = "ignored" },
   { type = "key", key = "<Enter>" }, { type = "paste", text = "Keep this title" }, { type = "key", key = "<CR>" }, { type = "key", key = "<Tab>" },
-  { type = "key", key = "<Tab>" }, { type = "key", key = "<CR>" },
+  { type = "key", key = "s" },
   function() observed.failure = snapshot() end,
   { type = "key", key = "<Esc>" }, function() observed.board = snapshot() end,
   { type = "key", key = "q" },
 })
-check(observed.failure:find("Keep this title", 1, true) and observed.failure:find("disk write failed", 1, true) and observed.failure:find("Create task (Todo)", 1, true), "event loop keeps create view and input after Store failure")
+check(observed.failure:find("Keep this title", 1, true) and observed.failure:find("disk write failed", 1, true) and observed.failure:find("─ Create", 1, true), "event loop keeps create view and input after Store failure")
 check(observed.board:find("TODO", 1, true) ~= nil, "failed create can be cancelled back to board")
 fake.create_error = nil
 reset_editor()
@@ -630,23 +690,25 @@ cancelled_description:handle_paste("Draft")
 cancelled_description:handle_key("<CR>", fake)
 cancelled_description:handle_key("<Tab>", fake)
 cancelled_description:handle_key("<CR>", fake)
-check(cancelled_description.task.description == "" and #editor.removes == 1, "cancelled create description editor preserves draft and cleans file")
+check(cancelled_description.task.description == "" and #editor.removes == 1 and cancelled_description.error == "editor exited with status 1", "cancelled create description editor preserves draft and cleans file")
 reset_editor()
 
 fake.result = board({ "task-1", "task-2", "task-3" })
 local deleting = Task.new({ id = "task-2", title = "Delete me", description = "", status = "todo" }, 80, 12)
 local deletes_before = fake.deletes or 0
-for _, key in ipairs({ "<Esc>", "n", "b", "q", "<Enter>" }) do
+for _, key in ipairs({ "<Esc>", "<C-c>", "n", "b", "q", "<CR>", "<Enter>", "j", "k", "<Down>", "<Up>", "<Tab>", "<S-Tab>", "J", "K", "g", "G", "<", ">", "?", "d", "Y" }) do
   check(deleting:handle_key("d", fake) == true and deleting.confirm_delete, "d enters delete confirmation")
-  check(row(deleting:render(), 11):find("Delete this task? y/N", 1, true), "confirmation prompt rendered")
-  deleting:handle_key(key, fake)
+  check(row(deleting:render(), 11):find('Delete "Delete me"?  y/N', 1, true), "confirmation prompt rendered")
+  local focus, offset, updates, creates = deleting.focused_field, deleting.offset, #fake.updates, fake.creates
+  local action = deleting:handle_key(key, fake)
+  check(action == true and deleting.focused_field == focus and deleting.offset == offset and #fake.updates == updates and fake.creates == creates and not deleting.editing and not deleting.help_open, "confirmation consumes key without other actions: " .. key)
   check(not deleting.confirm_delete and (fake.deletes or 0) == deletes_before and fake.result.tasks["task-2"], "non-y cancels deletion without executing key")
 end
 for _, err in ipairs({ "malformed JSON", "task not found: task-2", "write failed" }) do
   fake.delete_error = err
   deleting:handle_key("d", fake)
   check(deleting:handle_key("y", fake) == true and deleting.error == err and not deleting.confirm_delete, "delete failure stays in detail with retryable error")
-  check(row(deleting:render(), 10):find(err, 1, true), "delete failure rendered")
+  check(row(deleting:render(), 11):find(err, 1, true), "delete failure rendered")
 end
 fake.delete_error = nil
 deleting:handle_key("d", fake)
@@ -665,9 +727,27 @@ run({ { type = "key", key = "j" }, { type = "key", key = "<Enter>" },
   function() observed.deleted = snapshot(); observed.selected = selected_title() end,
   { type = "key", key = "q" },
 })
-check(observed.cancel:find("Title task-2", 1, true) and not observed.cancel:find("Delete this task?", 1, true), "Esc confirmation cancellation does not close detail window")
+check(observed.cancel:find("Title task-2", 1, true) and not observed.cancel:find('Delete "', 1, true), "Esc confirmation cancellation does not close detail window")
 check(fake.calls == delete_lists + 2 and observed.deleted:find("TODO · 2", 1, true) and not observed.deleted:find("Title task-2", 1, true), "deleted action reloads and returns to board")
 check(observed.selected:find("Title task-3", 1, true), "deleted middle task falls back to next task at same index")
+
+fake.result = board({ "task-1", "task-2", "task-3", "task-4", "task-5" })
+delete_lists, deletes_before = fake.calls, fake.deletes
+observed = {}
+run({ { type = "resize", width = 90, height = 10 }, { type = "key", key = "G" },
+  function() observed.scrolled = snapshot(); observed.before = selected_title() end,
+  { type = "key", key = "<Enter>" },
+  function() observed.detail = snapshot() end,
+  { type = "key", key = "d" }, { type = "key", key = "y" },
+  function() observed.deleted = snapshot(); observed.selected = selected_title(); observed.closed = last_win.closed end,
+  { type = "key", key = "<Enter>" },
+  function() observed.fallback = snapshot() end,
+  { type = "key", key = "q" },
+})
+check(observed.before and observed.before:find("Title task-5", 1, true) and not observed.scrolled:find("Title task-1", 1, true) and observed.detail:find("─ Task", 1, true) and observed.detail:find("Title task-5", 1, true), "final task deletion starts from scrolled Board and opens selected Detail")
+check(fake.deletes == deletes_before + 1 and fake.deleted_id == "task-5" and not fake.result.tasks["task-5"] and fake.result.tasks["task-1"] and fake.result.tasks["task-4"] and fake.calls == delete_lists + 2, "final Detail task deletion retains earlier tasks and reloads once")
+check(not observed.closed and observed.deleted:find("TODO · 4", 1, true) and not observed.deleted:find("─ Task", 1, true) and not observed.deleted:find("Title task-5", 1, true) and observed.selected and observed.selected:find("Title task-4", 1, true), "final Detail task deletion returns to Board with visible preceding fallback")
+check(observed.deleted:find("Title task-3", 1, true) and not observed.deleted:find("Title task-2", 1, true) and observed.fallback:find("─ Task", 1, true) and observed.fallback:find("Title task-4", 1, true), "scrolled Board clamps viewport after final deletion and fallback opens valid Detail")
 
 fake.result = board({ "task-1" })
 run({ { type = "key", key = "<Enter>" }, { type = "key", key = "d" }, { type = "key", key = "y" }, { type = "key", key = "<Enter>" }, { type = "key", key = "q" } })
@@ -676,10 +756,10 @@ fake.result = board({ "task-1" })
 fake.delete_error = "disk write failed"
 observed = {}
 run({ { type = "key", key = "<Enter>" }, { type = "key", key = "d" }, { type = "key", key = "y" },
-  function() observed.failure = snapshot() end, { type = "key", key = "b" },
+  function() observed.failure = snapshot() end, { type = "key", key = "<Esc>" },
   function() observed.back = snapshot() end, { type = "key", key = "q" },
 })
-check(observed.failure:find("disk write failed", 1, true) and observed.failure:find("Enter Edit", 1, true) and observed.back:find("TODO · 1", 1, true), "event loop keeps failed delete detail and permits returning to board")
+check(observed.failure:find("disk write failed", 1, true) and observed.failure:find("─ Task", 1, true) and observed.back:find("TODO · 1", 1, true), "event loop keeps failed delete detail and permits returning to board")
 fake.delete_error = nil
 
 fake.result = board({ "task-1", "task-2", "task-3" })
@@ -688,10 +768,34 @@ fake.result.tasks["task-2"].status = "doing"
 local moving = Board.new(80, 12)
 moving:reload(fake)
 moving:select_task("task-3")
+local function check_board_selection(lines, color)
+  local selected_row, focused_top, focused_bottom = false, false, false
+  for _, line in ipairs(lines) do
+    if type(line) == "table" then
+      for i, span in ipairs(line) do
+        local style = span[2]
+        if span[1]:find("▸ ", 1, true) then
+          selected_row = true
+          check(span[1]:find("Title task-", 1, true) and style.fg == color and style.bold and not style.bg, "selected marker and title follow status color without background")
+          for _, border in ipairs({ line[i - 1], line[i + 1] }) do
+            check(border[1] == "│" and border[2].fg == color and border[2].bold and not border[2].bg, "focused side borders match selected task color")
+          end
+        elseif span[1]:find("Title task-", 1, true) then
+          check(style.fg == "#eeeeee" and not style.bold and not style.bg, "nonselected tasks retain plain foreground")
+        end
+        if style.bold and span[1]:find("┌", 1, true) then focused_top = style.fg == color and not style.bg end
+        if style.bold and span[1]:find("└", 1, true) then focused_bottom = style.fg == color and not style.bg end
+      end
+    end
+  end
+  check(selected_row and focused_top and focused_bottom, "rendered selection and focused top bottom borders use status color")
+end
+check_board_selection(moving:render(), "#7799ff")
 local move_lists, move_updates = fake.calls, #fake.updates
-for _, move in ipairs({ { ">", "doing", 2 }, { ">", "done", 3 }, { "<", "doing", 2 }, { "<", "todo", 1 } }) do
+for _, move in ipairs({ { ">", "doing", 2, "#ffaa00" }, { ">", "done", 3, "#00cc66" }, { "<", "doing", 2, "#ffaa00" }, { "<", "todo", 1, "#7799ff" } }) do
   moving:handle_key(move[1], fake)
   check(fake.result.tasks["task-3"].status == move[2] and moving._state.focused_column == move[3] and moving:selected_task().id == "task-3", "move changes status and follows ID into target column")
+  check_board_selection(moving:render(), move[4])
   if move[2] == "doing" then check(moving._state.selected[2] == 3, "target selection uses moved ID rather than source index") end
   local update = fake.updates[#fake.updates]
   local fields = 0
@@ -714,6 +818,7 @@ fake.update_error = "move write failed"
 local failure_lists = fake.calls
 moving:handle_key(">", fake)
 check(moving._state.focused_column == 1 and moving._state.selected[1] == before_index and moving:selected_task().id == before_id and moving:selected_task().status == "todo" and fake.calls == failure_lists, "move failure leaves focus selection cards unchanged without reload")
+check_board_selection(moving:render(), "#7799ff")
 check(text(moving:render()[10]):find("Error: move write failed", 1, true) and moving:render()[10][3][2].fg == "#ff4444" and moving:render()[10][3][2].bold, "board displays bold prefixed move error")
 for _, size in ipairs({ { 20, 10 }, { 1, 1 }, { 80, 12 } }) do
   moving:resize(size[1], size[2])
@@ -732,11 +837,11 @@ fake.result = board({ "task-1", "task-2" })
 fake.result.tasks["task-2"].status = "doing"
 observed = {}
 run({ { type = "key", key = ">" },
-  function() observed.first = selected_title(); observed.board = snapshot() end,
+  function() observed.first = selected_title(); observed.board = snapshot(); check_board_selection(last_buf.lines, "#ffaa00") end,
   { type = "resize", width = 20, height = 10 }, { type = "key", key = ">" },
-  function() observed.narrow = snapshot(); observed.selected = selected_title() end,
+  function() observed.narrow = snapshot(); observed.selected = selected_title(); check_board_selection(last_buf.lines, "#00cc66") end,
   { type = "key", key = "<" }, { type = "resize", width = 80, height = 12 },
-  function() observed.resized = snapshot(); observed.final = selected_title() end,
+  function() observed.resized = snapshot(); observed.final = selected_title(); check_board_selection(last_buf.lines, "#ffaa00") end,
   { type = "key", key = "q" },
 }, { cols = 30, rows = 15 })
 check(observed.board:find("DOING · 2", 1, true) and observed.first:find("Title task-1", 1, true), "single-column board focuses target and selects moved ID")
@@ -973,7 +1078,7 @@ check(row(tiny_footer:render(), 5) == "?", "one-cell-wide help shows visible mod
 tiny_footer:handle_key("<Esc>", fake)
 check(not tiny_footer._state.help_open, "tiny help remains dismissible")
 
-for _, keys in ipairs({ {}, { "?" }, { "d" }, { "<CR>" }, { "<CR>", "<CR>" }, { "n" }, { "n", "<CR>" }, { "<CR>", "d" } }) do
+for _, keys in ipairs({ {}, { "?" }, { "<CR>" }, { "<CR>", "<CR>" }, { "n" }, { "n", "<CR>" }, { "<CR>", "?" }, { "n", "?" } }) do
   fake.result = board({ "task-1" })
   local events = {}
   for _, key in ipairs(keys) do events[#events + 1] = { type = "key", key = key } end
@@ -984,6 +1089,151 @@ for _, keys in ipairs({ {}, { "?" }, { "d" }, { "<CR>" }, { "<CR>", "<CR>" }, { 
   check(last_win.closed and not reached, "Ctrl+C immediately closes kanban from " .. table.concat(keys, ","))
   check(fake.deletes == deletes and #fake.updates == updates and fake.creates == creates, "Ctrl+C exits without saving or deleting")
 end
+
+fake.result = board({ "task-1" })
+local consumed_ctrl_c = false
+local ctrl_deletes, ctrl_updates, ctrl_creates = fake.deletes, #fake.updates, fake.creates
+run({ { type = "key", key = "d" }, { type = "key", key = "<C-c>" },
+  function()
+    consumed_ctrl_c = true
+    check(not last_win.closed and snapshot():find("TODO · 1", 1, true) and not snapshot():find('Delete "', 1, true), "Board delete confirmation consumes Ctrl-C as cancellation")
+  end,
+  { type = "key", key = "<C-c>" },
+})
+check(consumed_ctrl_c and last_win.closed and fake.deletes == ctrl_deletes and #fake.updates == ctrl_updates and fake.creates == ctrl_creates, "Board Ctrl-C cancellation preserves Store then second Ctrl-C quits")
+
+for _, creating in ipairs({ false, true }) do
+  local state = creating and Task.new_create(90, 27) or Task.new({ id = "task-1", title = "Help title", description = "first\nsecond\nthird", status = "todo" }, 90, 27)
+  state.focused_field = "description"
+  local calls, updates, deletes, creates = fake.calls, #fake.updates, fake.deletes, fake.creates
+  state:handle_key("?", fake)
+  local help = {}
+  for _, line in ipairs(state:render()) do help[#help + 1] = text(line) end
+  help = table.concat(help, "\n")
+  check(help:find("Keybindings", 1, true) and help:find("Tab / S-Tab", 1, true) and help:find(creating and "s           create task" or "J / K", 1, true), "Task help describes mode-specific phase2 actions")
+  for _, key in ipairs({ "q", "n", "s", "d", "y", "<", ">", "<CR>", "<Enter>", "j", "k", "<Down>", "<Up>", "<Tab>", "<S-Tab>", "J", "K", "g", "G", "<PageDown>", "<PageUp>" }) do
+    check(state:handle_key(key, fake) == true and state.help_open and state.focused_field == "description" and state.offset == 0 and not state.editing and not state.confirm_delete and fake.calls == calls and #fake.updates == updates and fake.deletes == deletes and fake.creates == creates, "Task help consumes key without side effects: " .. key)
+  end
+  check(not state:handle_paste("ignored"), "Task help ignores paste outside editing")
+  for _, size in ipairs({ { 0, 0 }, { 1, 1 }, { 2, 2 }, { 3, 4 }, { 20, 10 }, { 90, 27 } }) do
+    state:resize(size[1], size[2])
+    check(state.help_open and #state:render() == size[2], "Task help resize preserves modal and exact height")
+    for _, line in ipairs(state:render()) do check(width(text(line)) == size[1], "Task help resize fits exact width") end
+  end
+  check(state:handle_key("?", fake) and not state.help_open and state.focused_field == "description", "question mark closes Task help preserving focus")
+  state:handle_key("?", fake)
+  check(state:handle_key("<Esc>", fake) == true and not state.help_open, "Esc dismisses Task help rather than returning to Board")
+  state:handle_key("?", fake)
+  check(state:handle_key("<C-c>", fake) == "quit", "Ctrl-C quits Task help")
+end
+
+for _, height in ipairs({ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 27 }) do
+  local state = Task.new({ title = "Viewport", description = string.rep("line\n", 40), status = "todo" }, 90, height)
+  local gap = height >= 6 and 1 or 0
+  check(state.footer_height == math.min(3, height) and state.footer_gap == gap and state.pane_height == height - math.min(3, height) - gap and state.viewport == math.max(0, state.pane_height - 6), "Task layout reserves exact footer gap and viewport at height " .. height)
+  state:handle_key("G", fake)
+  check(state.offset == math.max(0, #state.description_lines - state.viewport) and #state:render() == height, "Task bottom scroll clamps to viewport at height " .. height)
+  for _, line in ipairs(state:render()) do check(width(text(line)) == 90, "Task layout fits exact width") end
+  if height >= 3 then
+    check(row(state:render(), height - 2) == "┌" .. string.rep("─", 88) .. "┐" and row(state:render(), height - 1):find("NORMAL", 1, true) and row(state:render(), height) == "└" .. string.rep("─", 88) .. "┘", "Task three-row footer remains anchored at bottom")
+  end
+end
+local scroll_focus = Task.new({ title = "Scroll", description = string.rep("line\n", 30), status = "todo" }, 30, 12)
+for _, field in ipairs({ "title", "description" }) do
+  scroll_focus.focused_field = field
+  for _, movement in ipairs({ { "g", 0 }, { "J", 1 }, { "K", 0 }, { "G", #scroll_focus.description_lines - 2 }, { "J", #scroll_focus.description_lines - 2 }, { "g", 0 }, { "K", 0 } }) do
+    check(scroll_focus:handle_key(movement[1], fake) and scroll_focus.offset == movement[2] and scroll_focus.focused_field == field, "description scroll clamps independently of " .. field .. " focus: " .. movement[1])
+  end
+end
+
+for _, entry in ipairs({ "<CR>", "n" }) do
+  fake.result = board({ "task-1" })
+  local calls, updates, deletes, creates = fake.calls, #fake.updates, fake.deletes, fake.creates
+  local seen = {}
+  run({ { type = "key", key = entry }, function() seen.before = snapshot() end,
+    { type = "key", key = "?" }, function() seen.help = snapshot() end,
+    { type = "key", key = "q" }, { type = "key", key = "s" }, { type = "key", key = "d" }, { type = "key", key = ">" },
+    function() seen.consumed = snapshot(); check(not last_win.closed, "Task help consumes q without closing event loop") end,
+    { type = "resize", width = 1, height = 1 }, function() check(#last_buf.lines == 1 and row(last_buf.lines, 1) == "?", "Task help event-loop narrow resize remains visible") end,
+    { type = "resize", width = 90, height = 27 },
+    { type = "key", key = "<Esc>" }, function() seen.dismissed = snapshot() end,
+    { type = "key", key = "?" }, { type = "key", key = "?" }, function() seen.toggled = snapshot() end,
+    { type = "key", key = "<Esc>" }, function() seen.back = snapshot() end,
+    { type = "key", key = "q" },
+  })
+  check(seen.help:find("Keybindings", 1, true) and seen.consumed == seen.help and seen.dismissed == seen.before and seen.toggled == seen.before and seen.back:find("TODO · 1", 1, true), "Task help integration dismisses and toggles without leaving view before Esc back")
+  check(fake.calls == calls + 2 and #fake.updates == updates and fake.deletes == deletes and fake.creates == creates, "Task help integration has no mutation side effects")
+end
+
+for _, key in ipairs({ "q", "<C-c>" }) do
+  fake.result = board({ "task-1" })
+  local reached = false
+  run({ { type = "key", key = "n" }, function() check(snapshot():find("─ Create", 1, true) and not last_win.closed, "Create is open before quit") end,
+    { type = "key", key = key }, function() reached = true end,
+  })
+  check(last_win.closed and not reached, key .. " closes Create immediately")
+end
+for _, key in ipairs({ "q", "<Esc>", "<C-c>" }) do
+  fake.result = board({ "task-1" })
+  local reached, deletes = false, fake.deletes
+  run({ { type = "key", key = "<CR>" }, { type = "key", key = "d" },
+    function() check(snapshot():find('Delete "Title task-1"?  y/N', 1, true), "Detail delete modal shows titled prompt before cancellation") end,
+    { type = "key", key = key }, function() reached = true; check(not last_win.closed and snapshot():find("─ Task", 1, true) and not snapshot():find('Delete "', 1, true), "Detail delete consumes " .. key .. " and stays open") end,
+    { type = "key", key = "q" },
+  })
+  check(reached and fake.deletes == deletes and last_win.closed, "Detail modal cancellation does not delete or execute " .. key)
+end
+
+fake.result = board({ "task-1" })
+fake.update_error = "detail status write failed"
+observed = {}
+local status_lists = fake.calls
+run({ { type = "key", key = "<CR>" }, { type = "key", key = "j" },
+  { type = "key", key = ">" },
+  function()
+    observed.failed_status = snapshot()
+    check(fake.calls == status_lists + 1 and last_buf.lines[1][1][2].fg == "#7799ff" and not last_win.closed, "failed detail status does not reload or recolor")
+    fake.update_error = nil
+  end,
+  { type = "key", key = ">" }, function() observed.retry_status = snapshot() end,
+  { type = "key", key = "<Esc>" }, function() observed.back = snapshot() end,
+  { type = "key", key = "q" },
+})
+check(observed.failed_status:find("Error: detail status write failed", 1, true) and observed.failed_status:find("▸ Description", 1, true) and observed.retry_status:find("▸ Description", 1, true) and not observed.retry_status:find("Error:", 1, true) and observed.back:find("DOING · 1", 1, true), "detail status failure retains focus and retry updates selected board card")
+
+for _, entry in ipairs({ "<CR>", "n" }) do
+  fake.result = { tasks = { ["task-1"] = { title = "Literal", description = "", status = "todo" } } }
+  local updates, creates = #fake.updates, fake.creates
+  observed = {}
+  run({ { type = "key", key = entry }, { type = "key", key = "<CR>" }, { type = "key", key = "q" },
+    function() observed.literal = snapshot(); check(not last_win.closed and #fake.updates == updates and fake.creates == creates, "title q remains literal without Store write") end,
+    { type = "key", key = "<Esc>" }, function() observed.cancel = snapshot() end,
+    { type = "key", key = "<CR>" }, { type = "key", key = "q" }, { type = "key", key = "<Enter>" },
+    function() observed.saved = snapshot() end,
+    { type = "key", key = "q" },
+  })
+  check(observed.literal:find(entry == "n" and "▸ q" or "Literalq", 1, true) and not observed.cancel:find(entry == "n" and "▸ q" or "Literalq", 1, true) and observed.saved:find(entry == "n" and "▸ q" or "Literalq", 1, true), "title integration Esc discards literal q and Enter saves")
+  check(#fake.updates == updates + (entry == "n" and 0 or 1) and fake.creates == creates, "Enter saves only Detail title or local Create draft")
+end
+
+reset_editor()
+maki.ui.open_editor = function(path) editor.files[path] = "Preserved body"; return 0 end
+fake.result = board({ "task-1" })
+fake.create_error = "create retry failed"
+observed = {}
+local attempts = fake.creates
+run({ { type = "key", key = "n" }, { type = "key", key = "<CR>" }, { type = "paste", text = "Preserved title" }, { type = "key", key = "<CR>" },
+  { type = "key", key = "j" }, { type = "key", key = "<Enter>" },
+  function() check(fake.creates == attempts and snapshot():find("Preserved body", 1, true), "Create description Enter edits draft without creating") end,
+  { type = "key", key = "s" },
+  function() observed.failure = snapshot(); fake.create_error = nil end,
+  { type = "key", key = "s" }, function() observed.success = snapshot() end,
+  { type = "key", key = "q" },
+})
+check(observed.failure:find("─ Create", 1, true) and observed.failure:find("Preserved title", 1, true) and observed.failure:find("Preserved body", 1, true) and observed.failure:find("Error: create retry failed", 1, true), "Create failure integration preserves both drafts")
+check(fake.creates == attempts + 2 and observed.success:find("─ Task", 1, true) and not observed.success:find("Error:", 1, true) and fake.result.tasks["task-2"].title == "Preserved title" and fake.result.tasks["task-2"].description == "Preserved body" and fake.result.tasks["task-2"].status == "todo", "Create retry becomes todo Detail with preserved drafts")
+maki.ui.open_editor = description_open
+reset_editor()
 
 print(string.format("%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

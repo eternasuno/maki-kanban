@@ -1,11 +1,49 @@
 local TextInput = require("maki.text_input")
+local Board = require("kanban.ui.board")
 
 local Task = {}
 Task.__index = Task
 
-local FIELDS = { "title", "status", "description" }
+local FIELDS = { "title", "description" }
 local STATUSES = { "todo", "doing", "done" }
-local CREATE_FIELDS = { "title", "description", "create" }
+local CREATE_FIELDS = { "title", "description" }
+local FOOTER_HEIGHT = 3
+local FOOTER_GAP = 1
+local PANE_BORDERS = 2
+local TITLE_HEIGHT = 2
+local FIELD_GAP = 1
+local DESCRIPTION_LABEL_HEIGHT = 1
+local DETAIL_HELP = {
+  "Navigation",
+  "  j / k       field",
+  "  Tab / S-Tab field",
+  "  J / K       scroll description",
+  "  g / G       top / bottom",
+  "",
+  "Actions",
+  "  Enter       edit field",
+  "  < / >       change status",
+  "  d           delete",
+  "",
+  "  Esc         back",
+  "  q           quit",
+  "  Ctrl-C      quit",
+  "  ? / Esc     close help",
+}
+local CREATE_HELP = {
+  "Navigation",
+  "  j / k       field",
+  "  Tab / S-Tab field",
+  "",
+  "Actions",
+  "  Enter       edit field",
+  "  s           create task",
+  "",
+  "  Esc         back",
+  "  q           quit",
+  "  Ctrl-C      quit",
+  "  ? / Esc     close help",
+}
 
 local function styled(text, color, bold, background)
   return { text, { fg = color, bold = bold, bg = background } }
@@ -43,13 +81,8 @@ local function wrap(text, width)
   return lines
 end
 
-local function status_label(status)
-  status = tostring(status or ""):lower()
-  return status == "todo" and "Todo" or status == "doing" and "Doing" or status == "done" and "Done" or "Todo"
-end
-
 local function status_color(status)
-  return maki.ui.theme_color(status == "doing" and "warning" or status == "done" and "success" or "accent")
+  return (maki.ui.theme_style(status == "doing" and "warning" or status == "done" and "success" or "accent") or {}).fg
 end
 
 function Task.new(task, width, height)
@@ -67,7 +100,11 @@ end
 
 function Task:resize(width, height)
   self.width, self.height = math.max(0, width or 0), math.max(0, height or 0)
-  local inner = math.max(0, self.width - 2)
+  self.footer_height = math.min(FOOTER_HEIGHT, self.height)
+  self.footer_gap = self.height >= FOOTER_HEIGHT + FOOTER_GAP + PANE_BORDERS and FOOTER_GAP or 0
+  self.pane_height = self.height - self.footer_height - self.footer_gap
+  self.viewport = math.max(0, self.pane_height - PANE_BORDERS - TITLE_HEIGHT - FIELD_GAP - DESCRIPTION_LABEL_HEIGHT)
+  local inner = math.max(0, self.width - 2 - maki.ui.display_width("▸ "))
   local title_text = self.title_input and self.title_input:value() or self.task.title or ""
   local title = wrap(title_text, inner)
   while #title < 2 do title[#title + 1] = "" end
@@ -76,13 +113,10 @@ function Task:resize(width, height)
     title[2] = head .. "…"
   end
   self.title_lines = { title[1], title[2] }
-  local status = self.status_draft or tostring(self.task.status or "todo"):lower()
-  self.status_text = status_label(status)
-  self.status_color = status_color(status)
+  self.status_color = status_color(self.creating and "todo" or self.task.status)
   self.description_lines = wrap(self.task.description or "", inner)
   if #self.description_lines == 0 then self.description_lines = { "" } end
-  local viewport = math.max(0, self.height - 8)
-  self.offset = math.min(math.max(0, self.offset), math.max(0, #self.description_lines - viewport))
+  self.offset = math.min(math.max(0, self.offset), math.max(0, #self.description_lines - self.viewport))
 end
 
 function Task:_begin(store)
@@ -93,18 +127,13 @@ function Task:_begin(store)
   if field == "title" then
     self.title_input = TextInput.new()
     self.title_input:insert_text(tostring(self.task.title or ""))
-  else
-    local current = tostring(self.task.status or "todo"):lower()
-    self.status_index = 1
-    for i, value in ipairs(STATUSES) do if value == current then self.status_index = i end end
-    self.status_draft = STATUSES[self.status_index]
   end
   self:resize(self.width, self.height)
   return true
 end
 
 function Task:_finish_edit()
-  self.editing, self.title_input, self.title_draft, self.status_draft, self.status_index = nil, nil, nil, nil, nil
+  self.editing, self.title_input, self.title_draft = nil, nil, nil
   self.error = nil
   self:resize(self.width, self.height)
 end
@@ -172,6 +201,8 @@ function Task:_edit_description(store)
         self.error = tostring(update_err or "could not update task")
       end
     end
+  else
+    self.error = "editor exited with status " .. tostring(exit_code)
   end
   maki.fs.rm(path)
   self:resize(self.width, self.height)
@@ -180,51 +211,72 @@ end
 
 function Task:render()
   local lines = {}
-  if self.height <= 0 then return lines end
   local width, height = self.width, self.height
+  if height <= 0 then return lines end
   local inner = math.max(0, width - 2)
-  local accent = maki.ui.theme_color("accent")
-  local selection = maki.ui.theme_style("item_selected") or {}
-  local focus_bg = selection.bg or accent
-  local focus_fg = selection.fg or maki.ui.theme_color("background")
-  for row = 1, height do
-    if width < 2 then
-      lines[row] = string.rep(" ", width)
+  local foreground = maki.ui.theme_color("foreground")
+  local marker_width = maki.ui.display_width("▸ ")
+  local border = self.status_color
+  local function pane_line(content, focused, marked)
+    local marker = marked and focused and "▸ " or string.rep(" ", marker_width)
+    return { styled("│", border), styled(fit(marker .. content, inner), foreground, focused), styled("│", border) }
+  end
+  for row = 1, self.pane_height do
+    if width < 2 or self.pane_height < 2 then
+      lines[#lines + 1] = string.rep(" ", width)
     elseif row == 1 then
-      lines[row] = { styled("┌" .. string.rep("─", math.max(0, width - 2)) .. "┐", accent) }
-    elseif row == height then
-      lines[row] = { styled("└" .. string.rep("─", inner) .. "┘", accent) }
-    elseif row == height - 1 then
-      local footer_text = self.editing == "title" and "Enter Save   Esc Cancel" or self.editing == "status" and "←/→ Change   Enter Save   Esc Cancel" or "Enter Edit   d Delete   b Back"
-      if self.creating and not self.editing then footer_text = "Tab Title/Description/Create   Enter Select   Esc Cancel" end
-      if self.confirm_delete then footer_text = "Delete this task? y/N" end
-      local footer = maki.ui.truncate_text(footer_text, inner).head
-      local label = string.rep(" ", math.max(0, inner - maki.ui.display_width(footer))) .. footer
-      lines[row] = { styled("│", accent), styled(label), styled("│", accent) }
-    elseif row == height - 2 and self.error then
-      lines[row] = { styled("│", accent), styled(fit(tostring(self.error), inner), maki.ui.theme_color("error")), styled("│", accent) }
+      local title = maki.ui.truncate_text(self.creating and "─ Create " or "─ Task ", inner).head
+      lines[#lines + 1] = { styled("┌" .. title .. string.rep("─", inner - maki.ui.display_width(title)) .. "┐", border) }
+    elseif row == self.pane_height then
+      lines[#lines + 1] = { styled("└" .. string.rep("─", inner) .. "┘", border) }
     else
       local content_row = row - 1
-      local spans = { styled("│", accent) }
-      if content_row <= 2 then
-        local focused = self.focused_field == "title"
-        spans[#spans + 1] = styled(fit(self.title_lines[content_row] or "", inner), focused and focus_fg or maki.ui.theme_color("foreground"), focused, focused and focus_bg)
-      elseif content_row == 3 then
-        spans = { styled("├" .. string.rep("─", inner) .. "┤", accent) }
-      elseif content_row == 4 then
-        local focused = self.focused_field == (self.creating and "create" or "status")
-        local label = self.creating and "Create task (Todo)" or self.status_text
-        spans[#spans + 1] = styled(fit(label, inner), focused and focus_fg or self.status_color, true, focused and focus_bg)
-      elseif content_row == 5 then
-        spans[#spans + 1] = styled(string.rep(" ", inner))
+      if content_row <= TITLE_HEIGHT then
+        local content = self.title_lines[content_row] or ""
+        if self.creating and content_row == 1 and content == "" then content = "Title" end
+        lines[#lines + 1] = pane_line(content, self.focused_field == "title", content_row == 1)
+      elseif content_row <= TITLE_HEIGHT + FIELD_GAP then
+        lines[#lines + 1] = pane_line("", false, false)
+      elseif content_row == TITLE_HEIGHT + FIELD_GAP + DESCRIPTION_LABEL_HEIGHT then
+        lines[#lines + 1] = pane_line("Description", self.focused_field == "description", true)
       else
-        local focused = self.focused_field == "description"
-        local description = self.description_lines[self.offset + content_row - 5]
-        spans[#spans + 1] = styled(fit(description or "", inner), focused and focus_fg or maki.ui.theme_color("foreground"), focused, focused and focus_bg)
+        local index = self.offset + content_row - TITLE_HEIGHT - FIELD_GAP - DESCRIPTION_LABEL_HEIGHT
+        lines[#lines + 1] = pane_line(self.description_lines[index] or "", false, false)
       end
-      if content_row ~= 3 then spans[#spans + 1] = styled("│", accent) end
-      lines[row] = spans
     end
+  end
+  for _ = 1, self.footer_gap do lines[#lines + 1] = string.rep(" ", width) end
+  local message, hint, color, bold
+  color, bold = foreground, false
+  if self.confirm_delete then
+    message = 'Delete "' .. tostring(self.task.title or "") .. '"?  y/N'
+    color, bold = (maki.ui.theme_style("error") or {}).fg, true
+  elseif self.error then
+    message = "Error: " .. tostring(self.error)
+    color, bold = (maki.ui.theme_style("error") or {}).fg, true
+  elseif self.editing == "title" then
+    message, hint = "EDIT TITLE", self.creating and "Enter done   Esc cancel" or "Enter save   Esc cancel"
+  elseif self.creating then
+    message, hint = "CREATE", "? help   s create   Esc back"
+  else
+    message, hint = "NORMAL", "? help   Esc back   q quit"
+  end
+  if hint then
+    message = message .. string.rep(" ", math.max(1, inner - 2 - maki.ui.display_width(message) - maki.ui.display_width(hint))) .. hint
+  end
+  for row = 1, self.footer_height do
+    if width < 2 or self.footer_height < FOOTER_HEIGHT then
+      lines[#lines + 1] = { styled(fit(message, width), color, bold) }
+    elseif row == 1 then
+      lines[#lines + 1] = { styled("┌" .. string.rep("─", inner) .. "┐", foreground) }
+    elseif row == self.footer_height then
+      lines[#lines + 1] = { styled("└" .. string.rep("─", inner) .. "┘", foreground) }
+    else
+      lines[#lines + 1] = { styled("│", foreground), styled(fit(" " .. message, inner), color, bold), styled("│", foreground) }
+    end
+  end
+  if self.help_open and not self.confirm_delete then
+    Board.help_overlay(self, lines, self.creating and CREATE_HELP or DETAIL_HELP)
   end
   return lines
 end
@@ -243,9 +295,15 @@ function Task:handle_key(key, store)
   if self.confirm_delete then
     self.confirm_delete = false
     if key ~= "y" then return true end
-    local deleted, err = store:delete(self.task.id)
+    local deleted, err
+    if store then deleted, err = store:delete(self.task.id) else err = "store unavailable" end
     if not deleted then self.error = tostring(err or "could not delete task"); return true end
     return "deleted"
+  end
+  if key == "<C-c>" then return "quit" end
+  if self.help_open then
+    if key == "?" or key == "<Esc>" then self.help_open = false end
+    return true
   end
   if self.editing == "title" then
     if key == "<Esc>" then self:_finish_edit(); return true end
@@ -253,54 +311,51 @@ function Task:handle_key(key, store)
     local result = self.title_input:handle_key(key)
     if result ~= TextInput.Result.IGNORED then self.title_draft = self.title_input:value(); self:resize(self.width, self.height); return true end
     return false
-  elseif self.editing == "status" then
-    if key == "<Esc>" then self:_finish_edit(); return true end
-    if key == "<CR>" or key == "<Enter>" then return self:_save(store, "status", STATUSES[self.status_index]) end
-    if key == "h" or key == "<Left>" then self.status_index = (self.status_index - 2) % #STATUSES + 1
-    elseif key == "l" or key == "<Right>" then self.status_index = self.status_index % #STATUSES + 1
-    else return false end
-    self.status_draft = STATUSES[self.status_index]; self:resize(self.width, self.height); return true
   end
-  if self.creating and (key == "<Esc>" or key == "q") then return "back" end
+  if key == "q" then return "quit" end
+  if key == "<Esc>" then return "back" end
+  if key == "?" then self.help_open = true; return true end
   if key == "d" and not self.creating then
     self.confirm_delete, self.error = true, nil
     return true
   end
-  if key == "<Tab>" or key == "<S-Tab>" then
+  if key == "<Tab>" or key == "<S-Tab>" or key == "j" or key == "<Down>" or key == "k" or key == "<Up>" then
     local fields = self.creating and CREATE_FIELDS or FIELDS
     local current = 1
     for i, field in ipairs(fields) do if field == self.focused_field then current = i end end
-    local next_index = key == "<Tab>" and current % #fields + 1 or (current - 2) % #fields + 1
+    local forward = key == "<Tab>" or key == "j" or key == "<Down>"
+    local next_index = forward and current % #fields + 1 or (current - 2) % #fields + 1
     self.focused_field = fields[next_index]
     return true
   elseif key == "<CR>" or key == "<Enter>" then
-    if self.creating and self.focused_field == "create" then
-      local created, err
-      if store then
-        created, err = store:create({ title = self.task.title, description = self.task.description })
-      else
-        err = "store unavailable"
-      end
-      if not created then self.error = tostring(err or "could not create task"); return true end
-      self.task = created
-      return "created"
-    end
     return self:_begin(store)
-  elseif key == "b" then return "back"
+  elseif self.creating and key == "s" then
+    local created, err
+    if store then created, err = store:create({ title = self.task.title, description = self.task.description }) else err = "store unavailable" end
+    if not created then self.error = tostring(err or "could not create task"); return true end
+    self.task, self.creating, self.error = created, false, nil
+    self.focused_field, self.offset = "title", 0
+    self:resize(self.width, self.height)
+    return "created"
+  elseif not self.creating and (key == "<" or key == ">") then
+    local current = 1
+    for i, status in ipairs(STATUSES) do if status == self.task.status then current = i end end
+    local target = current + (key == "<" and -1 or 1)
+    if not STATUSES[target] then return true end
+    return self:_save(store, "status", STATUSES[target])
   end
-  local viewport = math.max(0, self.height - 8)
+  if self.creating then return false end
+  local viewport = self.viewport
   local max_offset = math.max(0, #self.description_lines - viewport)
   local next_offset = self.offset
-  if key == "j" or key == "<Down>" then next_offset = next_offset + 1
-  elseif key == "k" or key == "<Up>" then next_offset = next_offset - 1
+  if key == "J" then next_offset = next_offset + 1
+  elseif key == "K" then next_offset = next_offset - 1
   elseif key == "<PageDown>" then next_offset = next_offset + math.max(1, viewport)
   elseif key == "<PageUp>" then next_offset = next_offset - math.max(1, viewport)
   elseif key == "g" then next_offset = 0
   elseif key == "G" then next_offset = max_offset
   else return false end
-  next_offset = math.min(math.max(0, next_offset), max_offset)
-  if next_offset == self.offset then return false end
-  self.offset = next_offset
+  self.offset = math.min(math.max(0, next_offset), max_offset)
   return true
 end
 

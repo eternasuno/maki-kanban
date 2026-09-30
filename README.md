@@ -27,17 +27,66 @@ Restart Maki and approve the package and its `fs_read` / `fs_write` permissions.
 | `d` | Confirm task deletion |
 | `r` | Reload |
 | `?` | Open keybinding help |
-| `q` / Esc | Close kanban |
+| `q` / Esc / Ctrl-C | Close kanban |
 
 Moves do not wrap at either edge. After a successful move, focus and selection follow the task by ID; failures preserve selection and display an error. Column navigation never moves tasks. The former `1`/`2`/`3` and uppercase `H`/`L` Board bindings are removed.
 
-`?` opens the keybinding help overlay. `?` or Esc closes it. While help is open, other keys are consumed without changing the Board. Help is centered and recomputes its size and position after resizing; narrow windows clip its contents safely.
+`?` opens the modal keybinding help overlay; see the modal-key rules below.
 
 A separate three-line Footer box shows `NORMAL` and compact help/quit hints. It also displays errors and delete confirmation, using bold error-colored text. The task viewport excludes the Footer and its spacing, including after resizing. Extremely small windows clip the layout to the available cells.
 
-In Task Detail, Tab / Shift+Tab switches between Title, Status and Description; `j`/`k`, Up/Down, PageDown/PageUp and `g`/`G` scroll the description. Enter edits the focused field. Title is edited inline, and Status is switched with `h`/`l` or Left/Right; Enter saves either field and Esc cancels. Description opens a temporary file in `$EDITOR`: save the file and exit to save the change, or exit without saving to cancel (no change). `b` returns to the board with selection and scroll position intact; `q` or Esc closes the Kanban UI outside inline editing.
+### Task Detail
 
-In Task Detail outside field editing, press `d` to display `Delete this task? y/N`. Only `y` confirms; any other key (including `n` or Esc) cancels confirmation without performing that key's normal action. Successful deletion reloads and returns to the board; selection falls back to the same index in the original column, clamped to the last remaining task, or no task if the column is empty. Delete failures keep Task Detail open and display the error so you can retry or return with `b`. On the board, `d` shows `Delete "title"? y/N` in the Footer without opening Task Detail; confirmation takes priority over normal hints, errors and help. Only `y` deletes; all other keys (including `q`, Esc, `n`, Enter and navigation) cancel and are consumed. Success reloads the board with the same clamped-index fallback; failure preserves cards, focus and selection and displays an error for retry. Resizing retains confirmation.
+Task Detail has only Title and Description fields, with no Status row. Its border reflects the current status: TODO uses accent, DOING warning, and DONE success.
+
+| Detail key (outside editing) | Action |
+| --- | --- |
+| `j` / Down, Tab | Focus the next field (Title / Description) |
+| `k` / Up, Shift+Tab | Focus the previous field |
+| `J` / `K` | Scroll the description down / up |
+| PageDown / PageUp | Scroll the description by a viewport |
+| `g` / `G` | Scroll to the top / bottom of the description |
+| Enter | Edit the focused field |
+| `<` / `>` | Immediately save the previous / next status |
+| `d` | Confirm task deletion |
+| Esc | Return to the board |
+| `q` / Ctrl-C | Close kanban |
+| `?` | Open keybinding help |
+
+Status changes are bounded by `todo`, `doing`, and `done`: they do not wrap or open an editor. Successful changes update the border and make board selection follow the task by ID; failures leave the task unchanged and display an error. Returning to the board preserves selection and scroll position, subject to reloading and clamping.
+
+### Create
+
+On the board, `n` opens Create in normal field-selection mode. Only Title and Description are selectable; there is no Status or Create field.
+
+| Create key (outside editing) | Action |
+| --- | --- |
+| `j` / Down, Tab | Focus the next field (Title / Description) |
+| `k` / Up, Shift+Tab | Focus the previous field |
+| Enter | Edit the focused field |
+| `s` | Explicitly create the task |
+| Esc | Discard the form and return to the board |
+| `q` / Ctrl-C | Close kanban without creating a task |
+| `?` | Open keybinding help |
+
+`s` sends only Title and Description to the Store; status defaults to `todo`. Success opens the new task in Task Detail and selects it on the board. Failure keeps Create open, preserves both drafts, and displays the error. Finishing a field edit does not create a task.
+
+### Field editing and modal keys
+
+| Title-edit key | Action |
+| --- | --- |
+| Enter | Save the title in Detail / finish the draft in Create |
+| Esc | Cancel the current title edit |
+| `q` | Insert the character `q`, not quit |
+| Ctrl-C | Close kanban through Maki's parent-window dismissal |
+
+Description editing opens a temporary file through Maki's external editor lifecycle (`$VISUAL` / `$EDITOR`). Save the file and exit successfully to apply changed text immediately in Detail or retain it as a draft in Create. Exiting without changing the file leaves the description unchanged. A nonzero editor exit or a read/save failure displays an error without applying the change; the temporary file is removed afterward.
+
+Help is modal on the board, in Detail, and in Create: `?` or Esc closes it, Ctrl-C quits kanban, and all other keys (including `q`) are consumed without their normal actions. Help is centered and recomputes its size and position after resizing; narrow windows clip its contents safely.
+
+On the board or in Detail, `d` asks for deletion confirmation. Only `y` confirms. Every other key, including `q`, Esc, and Ctrl-C, cancels confirmation and is consumed rather than performing its normal action. Successful deletion reloads the board; Detail returns to it. Selection falls back to the same index in the original column, clamped to the last remaining task, or no task if the column is empty. Failure displays an error and keeps the current view open so you can retry.
+
+Detail and Create have an independent Footer box showing mode, hints, errors, or deletion confirmation. The description viewport excludes the Footer and its spacing and is recomputed on resize; small windows clip safely.
 
 The agent can use:
 
@@ -46,8 +95,6 @@ The agent can use:
 - `task_create` — create with required `title` and optional `description`; ID is generated, status defaults to `todo`.
 - `task_update` — pass `id` and at least one of `title`, `description`, or `status` at the top level. Any legal status is allowed directly.
 - `task_delete` — delete by required `id`; returns the deleted task as JSON.
-
-On the board, press `n` to open task creation in field-selection mode. Tab / Shift+Tab switches between Title, Description and Create. Press Enter on Title to edit it, then Enter again to keep the draft; Enter on Description opens a temporary file in `$EDITOR`; Enter on Create saves through the Store with status `todo`. Save failures keep the form and inputs and display the error. Esc cancels the current Title edit; Esc outside editing (or `b`) cancels creation and returns to the board without creating a task. Successful creation reloads the board, focuses TODO and selects the new task. Board reloads preserve each column's selected task by ID where possible, with a clamped nearby fallback when it is removed or moved.
 
 ## Data
 
@@ -69,7 +116,7 @@ The stored `tasks` value is an ID-to-task object, not an array; the task body do
 
 ## Statuses
 
-`todo`, `doing`, `done` (shown as Todo, Doing, Done in task detail).
+`todo`, `doing`, `done` (represented by accent, warning, and success borders in Task Detail; there is no Status row).
 
 ## Development
 
@@ -98,7 +145,7 @@ Use a fresh temporary project such as `/tmp/maki-kanban-test`:
 5. Change `title` and `description` with `task_update`; omitted fields must remain unchanged.
 6. Try `status: "blocked"`, then `task_get` and `task_update` with a missing ID; all must report errors without modifying the file.
 7. Replace the JSON with invalid text, call `task_list` and open `/kanban`; expect an explicit error and the original invalid bytes to remain.
-8. On `/kanban`, create with `n`, open with Enter, and try `d` → `n`, `d` → Esc, then `d` → `y`. Check selection after deleting a middle task and the last task in a column. Create another task and use `L`, `L`, `H`, `H`; selection must follow it. Repeat in a narrow single-column window and resize while moving. Try deleting/moving with malformed JSON and verify its bytes remain unchanged.
+8. On `/kanban`, open Create with `n`, edit Title and Description with Enter, and create with `s`; confirm the new Task Detail opens. Return with Esc, reopen with Enter, and try `d` → `n`, `d` → Esc, then `d` → `y`. Check selection after deleting a middle task and the last task in a column. Create another task and use `>`, `>`, `<`, `<`; selection must follow it. Repeat in a narrow single-column window and resize while moving. Try deleting/moving with malformed JSON and verify its bytes remain unchanged.
 9. Temporarily change the window title in `lua/kanban/ui.lua`, execute `/reload`, open `/kanban` and confirm the new title. Restore the code and reload again.
 
 In this development environment the installed Maki 0.5.7 CLI confirmed registration and the agent tools performed steps 1–3, the status/text updates and error checks; the corrupt JSON remained intact. An interactive TUI is required to visually verify the window and to execute `/reload`: those interactive checks have not been independently confirmed here.

@@ -7,9 +7,9 @@ local COLUMNS = {
   { status = "done", title = "DONE" },
 }
 local COLUMN_COLORS = {
-  maki.ui.theme_color("accent"),
-  maki.ui.theme_color("warning"),
-  maki.ui.theme_color("success"),
+  (maki.ui.theme_style("accent") or {}).fg,
+  (maki.ui.theme_style("warning") or {}).fg,
+  (maki.ui.theme_style("success") or {}).fg,
 }
 local HORIZONTAL_PADDING = 2
 local VERTICAL_PADDING = 1
@@ -116,14 +116,16 @@ local HELP = {
   "  d           delete task",
   "  r           reload",
   "  q / Esc     close kanban",
+  "  Ctrl-C      quit kanban",
   "",
   "  ? / Esc     close help",
 }
 
-local function help_overlay(state, lines)
-  local width, height = math.min(36, state.width), math.min(#HELP + 2, state.height)
+function Board.help_overlay(state, lines, help)
+  if state.width <= 0 or state.height <= 0 then return end
+  local width, height = math.min(36, state.width), math.min(#help + 2, state.height)
   if width < 2 or height < 2 then
-    lines[math.floor((state.height + 1) / 2)] = { styled(fit("? Help: ? / Esc close", state.width), maki.ui.theme_color("accent")) }
+    lines[math.floor((state.height + 1) / 2)] = { styled(fit("? Help: ? / Esc close", state.width), (maki.ui.theme_style("accent") or {}).fg) }
     return
   end
   local x, y = math.floor((state.width - width) / 2), math.floor((state.height - height) / 2)
@@ -136,10 +138,10 @@ local function help_overlay(state, lines)
     elseif row == height then
       text = "└" .. string.rep("─", width - 2) .. "┘"
     else
-      text = "│" .. fit(HELP[row - 1] or "", width - 2) .. "│"
+      text = "│" .. fit(help[row - 1] or "", width - 2) .. "│"
     end
     local line = slice_line(lines[y + row], 0, x)
-    line[#line + 1] = styled(text, row == 1 and maki.ui.theme_color("accent") or color)
+    line[#line + 1] = styled(text, row == 1 and (maki.ui.theme_style("accent") or {}).fg or color)
     for _, span in ipairs(slice_line(lines[y + row], x + width, state.width - x - width)) do line[#line + 1] = span end
     lines[y + row] = line
   end
@@ -180,7 +182,7 @@ local function board_lines(state)
         local marker = selected and "▸ " or string.rep(" ", marker_width)
         local content = marker .. (task and task.title or "")
         line[#line + 1] = styled("│", border_color(i), nil, i == state.focused_column)
-        line[#line + 1] = styled(fit(content, width - 2), selected and maki.ui.theme_color("accent") or foreground, nil, selected or false)
+        line[#line + 1] = styled(fit(content, width - 2), selected and COLUMN_COLORS[i] or foreground, nil, selected or false)
         line[#line + 1] = styled("│", border_color(i), nil, i == state.focused_column)
         if position < #visible then line[#line + 1] = styled(" ") end
       end
@@ -201,10 +203,10 @@ local function board_lines(state)
     local task
     for _, item in ipairs(state.tasks) do if item.id == state.pending_delete_id then task = item; break end end
     message = 'Delete "' .. (task and task.title or "task") .. '"?  y/N'
-    color, bold = maki.ui.theme_color("error"), true
+    color, bold = (maki.ui.theme_style("error") or {}).fg, true
   elseif not state.valid or state.error_message then
     message = "Error: " .. tostring(state.error_message or state.error or "unknown error")
-    color, bold = maki.ui.theme_color("error"), true
+    color, bold = (maki.ui.theme_style("error") or {}).fg, true
   else
     local hint = "? help   q quit"
     local inner = math.max(0, pane_width - 4)
@@ -222,7 +224,7 @@ local function board_lines(state)
     end
   end
   for _ = 1, vertical do blank() end
-  if state.help_open and not state.pending_delete_id then help_overlay(state, lines) end
+  if state.help_open and not state.pending_delete_id then Board.help_overlay(state, lines, HELP) end
   return lines
 end
 
@@ -293,6 +295,7 @@ function Board:handle_key(key, store)
     return true
   end
   if state.help_open then
+    if key == "<C-c>" then return "quit" end
     if key == "?" or key == "<Esc>" then state.help_open = false; refresh_lines(state) end
     return true
   end
