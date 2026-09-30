@@ -142,6 +142,27 @@ function fake:update(id, patch)
   self.result.tasks[id] = source
   return { id = id, title = source.title, description = source.description, status = source.status }
 end
+function fake:delete(id)
+  self.deletes = (self.deletes or 0) + 1
+  self.deleted_id = id
+  if self.delete_error then return nil, self.delete_error end
+  local task = self.result.tasks[id]
+  if not task then return nil, "task not found: " .. id end
+  self.result.tasks[id] = nil
+  return { id = id, title = task.title, description = task.description, status = task.status }
+end
+function fake:create(input)
+  self.creates = (self.creates or 0) + 1
+  self.create_inputs = self.create_inputs or {}
+  self.create_inputs[#self.create_inputs + 1] = { title = input.title, description = input.description }
+  if self.create_error then return nil, self.create_error end
+  if type(input.title) ~= "string" or input.title:match("^%s*$") then return nil, "title must not be empty" end
+  local number = 1
+  while self.result.tasks["task-" .. number] do number = number + 1 end
+  local id = "task-" .. number
+  self.result.tasks[id] = { title = input.title, description = input.description, status = "todo" }
+  return { id = id, title = input.title, description = input.description, status = "todo" }
+end
 function fake:list()
   self.calls = self.calls + 1
   if self.error then return nil, self.error end
@@ -358,6 +379,25 @@ retained:handle_key("2", fake)
 retained:handle_key("1", fake)
 check(retained:selected_task() == selected_before and row(retained:render(), 3) == before, "board preserves selection and scroll offset across focus change")
 
+local by_id = Board.new(90, 8)
+fake.result = board({ "task-1", "task-2", "task-3" })
+by_id:reload(fake)
+by_id:handle_key("j", fake)
+fake.result = board({ "task-0", "task-1", "task-2", "task-3" })
+by_id:reload(fake)
+check(by_id:selected_task().id == "task-2", "reload preserves selected ID after insertion before it")
+fake.result = board({ "task-0", "task-2", "task-3" })
+by_id:reload(fake)
+check(by_id:selected_task().id == "task-2", "reload preserves selected ID after deletion before it")
+by_id:select_task("task-3")
+check(by_id:selected_task().id == "task-3" and by_id._state.focused_column == 1, "select_task focuses matching ID")
+fake.result = board({ "task-0", "task-1" })
+by_id:reload(fake)
+check(by_id:selected_task().id == "task-1", "deleted selection falls back to clamped old index")
+fake.result = { tasks = {} }
+by_id:reload(fake)
+check(by_id:selected_task() == nil and by_id._state.offsets[1] == 0, "empty reload clamps selection and offset")
+
 for _, key in ipairs({ "q", "<Esc>" }) do
   fake.result = { tasks = { ["task-1"] = { title = "Open detail", description = "text", status = "todo" } } }
   run({ { type = "key", key = "<CR>" }, { type = "key", key = key } })
@@ -429,6 +469,372 @@ calls_before = fake.calls
 run({ { type = "key", key = "<CR>" }, { type = "key", key = "<Tab>" }, { type = "key", key = "<Tab>" }, { type = "key", key = "<CR>" }, { type = "key", key = "b" }, { type = "key", key = "q" } })
 check(opened_path and fake.result.tasks["task-1"].description == "edited\nline" and fake.calls == calls_before + 2 and not editor.files[opened_path], "description save refreshes board cache and removes temp file")
 maki.ui.open_editor = description_open
+
+local create_task = Task.new_create(30, 12)
+check(create_task.creating and not create_task.editing and create_task.focused_field == "title", "creation starts in title field selection mode")
+check(not create_task:handle_paste("ignored") and create_task.task.title == "", "paste is ignored until title editing begins")
+check(create_task:handle_key("<Enter>", fake) and create_task.editing == "title", "Enter begins title editing in create mode")
+create_task:handle_paste("新しい")
+check(create_task:handle_key("<Enter>", fake) and create_task.task.title == "新しい" and not create_task.editing, "Enter stores CJK title draft locally")
+create_task:handle_key("<Tab>", fake)
+check(create_task.focused_field == "description", "creation tabs from title to description")
+create_task:handle_key("<Tab>", fake)
+check(create_task.focused_field == "create", "creation tabs to create action")
+
+fake.result = { tasks = { ["task-1"] = { title = "Existing", description = "", status = "todo" }, ["task-3"] = { title = "Gap", description = "", status = "todo" } } }
+fake.create_error = nil
+local create_calls = fake.creates or 0
+run({ { type = "key", key = "n" }, { type = "paste", text = "ignored" }, { type = "key", key = "<Enter>" }, { type = "paste", text = "新" }, { type = "key", key = "<Enter>" }, { type = "key", key = "<Tab>" }, { type = "key", key = "<Tab>" }, { type = "key", key = "<Enter>" }, { type = "key", key = "q" } })
+check(fake.creates == create_calls + 1 and fake.result.tasks["task-2"].title == "新", "n creates title-only CJK task")
+check(snapshot():find("新", 1, true) and snapshot():find("TODO(3)", 1, true), "creation reloads TODO board and selects created task ID")
+
+fake.result = board({ "task-1", "task-2", "task-3" })
+by_id:reload(fake)
+by_id:select_task("task-2")
+fake.result.tasks["task-2"].status = "doing"
+by_id:reload(fake)
+check(by_id._state.focused_column == 1 and by_id:selected_task().id == "task-3", "moved selection stays in original column with valid fallback")
+fake.result.tasks["task-1"].status = "doing"
+fake.result.tasks["task-3"].status = "doing"
+by_id:reload(fake)
+check(by_id._state.focused_column == 1 and by_id:selected_task() == nil and by_id._state.selected[1] == 1, "moving last tasks leaves valid empty original column")
+by_id:select_task("task-2")
+fake.result.tasks["task-0"] = { title = "Inserted", status = "doing" }
+by_id:reload(fake)
+check(by_id._state.focused_column == 2 and by_id:selected_task().id == "task-2", "reload preserves non-TODO column selection by ID")
+by_id:handle_key("1", fake)
+by_id:reload(fake)
+by_id:handle_key("2", fake)
+check(by_id:selected_task().id == "task-2", "reload preserves unfocused column selection by ID")
+retained:reload(fake)
+retained:select_task("task-3")
+local offset_before = retained._state.offsets[2]
+retained:reload(fake)
+check(retained._state.offsets[2] == offset_before, "unchanged reload retains legal scroll offset")
+
+local function selected_title()
+  for _, line in ipairs(last_buf.lines) do
+    if type(line) == "table" then
+      for _, span in ipairs(line) do
+        if type(span[2]) == "table" and span[2].bg then return span[1] end
+      end
+    end
+  end
+end
+check(selected_title():find("新", 1, true) ~= nil, "title-only creation selects new ID rather than last index")
+
+reset_editor()
+fake.result = { tasks = { ["task-1"] = { title = "Existing", description = "", status = "todo" } } }
+local updates_before, lists_before = #fake.updates, fake.calls
+local description_creates = fake.creates
+maki.ui.open_editor = function(path)
+  check(editor.files[path] == "", "create description editor starts with empty draft")
+  editor.files[path] = "first\n第二行"
+  return 0
+end
+observed = {}
+run({
+  { type = "key", key = "2" }, { type = "key", key = "n" },
+  function() observed.open = snapshot() end,
+  { type = "paste", text = "ignored" }, { type = "key", key = "<Enter>" },
+  { type = "paste", text = "With description" }, { type = "key", key = "<Enter>" },
+  { type = "key", key = "<Tab>" }, { type = "key", key = "<Enter>" },
+  function() check(fake.creates == description_creates and #fake.updates == updates_before, "description draft does not write Store before Create") end,
+  { type = "key", key = "<Tab>" }, { type = "key", key = "<Enter>" },
+  function() observed.selected = selected_title() end,
+  { type = "key", key = "<CR>" },
+  function() observed.detail = snapshot() end,
+  { type = "key", key = "q" },
+})
+check(observed.open:find("Create task (Todo)", 1, true) and observed.open:find("Esc Cancel", 1, true), "n opens create flow")
+check(fake.result.tasks["task-2"].description == "first\n第二行" and fake.result.tasks["task-2"].status == "todo", "description creation stores draft and fixed TODO status")
+check(fake.calls == lists_before + 2 and observed.selected:find("With description", 1, true) and observed.detail:find("With description", 1, true), "creation reloads once, focuses TODO and opens selected new task")
+check(#editor.removes == 1 and next(editor.files) == nil, "create description removes temporary file")
+maki.ui.open_editor = description_open
+
+for _, title in ipairs({ "", "   " }) do
+  local invalid = Task.new_create(80, 12)
+  invalid:handle_key("<CR>", fake)
+  invalid:handle_paste(title)
+  invalid:handle_key("<CR>", fake)
+  invalid:handle_key("<Tab>", fake)
+  invalid:handle_key("<Tab>", fake)
+  local attempts = fake.creates
+  check(invalid:handle_key("<CR>", fake) == true and fake.creates == attempts + 1 and invalid.error == "title must not be empty", "Store rejects empty/whitespace create title")
+  check(invalid.task.title == title and row(invalid:render(), 10):find("title must not be empty", 1, true), "invalid create retains input and renders Store error")
+end
+
+reset_editor()
+local failed_create = Task.new_create(80, 12)
+failed_create:handle_key("<CR>", fake)
+failed_create:handle_paste("Retained title")
+failed_create:handle_key("<CR>", fake)
+failed_create:handle_key("<Tab>", fake)
+maki.ui.open_editor = function(path) editor.files[path] = "Retained description"; return 0 end
+failed_create:handle_key("<CR>", fake)
+failed_create:handle_key("<Tab>", fake)
+fake.create_error = "write failed"
+check(failed_create:handle_key("<CR>", fake) == true and failed_create.creating and failed_create.task.title == "Retained title" and failed_create.task.description == "Retained description", "Store create failure keeps create UI and both drafts")
+check(row(failed_create:render(), 10):find("write failed", 1, true), "create failure displays error")
+fake.create_error = nil
+check(failed_create:handle_key("<CR>", fake) == "created" and failed_create.task.status == "todo", "failed creation can retry successfully")
+maki.ui.open_editor = description_open
+
+local cancel_creates = fake.creates
+observed = {}
+run({ { type = "key", key = "n" }, { type = "key", key = "<Esc>" },
+  function() observed.cancel_flow = snapshot() end, { type = "key", key = "q" },
+})
+check(fake.creates == cancel_creates and observed.cancel_flow:find("TODO", 1, true) and not observed.cancel_flow:find("Create task (Todo)", 1, true), "Esc exits field selection to board without creating")
+
+run({ { type = "key", key = "n" }, { type = "key", key = "<Enter>" }, { type = "paste", text = "Cancel me" },
+  { type = "key", key = "<Esc>" }, function() observed.cancel_edit = snapshot() end,
+  { type = "key", key = "<Esc>" }, function() observed.cancel_flow = snapshot() end,
+  { type = "key", key = "q" },
+})
+check(fake.creates == cancel_creates and observed.cancel_edit:find("Create task (Todo)", 1, true) and not observed.cancel_edit:find("Cancel me", 1, true), "Esc cancels title draft without creating or leaving create view")
+check(observed.cancel_flow:find("TODO", 1, true) and not observed.cancel_flow:find("Create task (Todo)", 1, true), "second Esc exits creation to board")
+
+local resized_create = Task.new_create(80, 12)
+resized_create:handle_key("<CR>", fake)
+resized_create:handle_paste("中文创建标题中文创建标题")
+for _, size in ipairs({ { 20, 10 }, { 3, 4 }, { 1, 1 }, { 0, 0 }, { 80, 12 } }) do
+  resized_create:resize(size[1], size[2])
+  check(#resized_create:render() == size[2], "create resize respects height")
+  for _, line in ipairs(resized_create:render()) do check(width(text(line)) <= size[1], "create resize stays within display width") end
+end
+check(resized_create.title_input:value() == "中文创建标题中文创建标题", "create resize preserves CJK title input")
+run({ { type = "key", key = "n" }, { type = "paste", text = "ignored" },
+  { type = "resize", width = 1, height = 1 },
+  function() check(#last_buf.lines == 1 and width(text(last_buf.lines[1])) <= 1, "event-loop resize renders bounded create view") end,
+  { type = "key", key = "<Esc>" }, { type = "key", key = "<Esc>" }, { type = "key", key = "q" },
+})
+
+fake.create_error = "disk write failed"
+observed = {}
+run({ { type = "key", key = "n" }, { type = "paste", text = "ignored" },
+  { type = "key", key = "<Enter>" }, { type = "paste", text = "Keep this title" }, { type = "key", key = "<CR>" }, { type = "key", key = "<Tab>" },
+  { type = "key", key = "<Tab>" }, { type = "key", key = "<CR>" },
+  function() observed.failure = snapshot() end,
+  { type = "key", key = "<Esc>" }, function() observed.board = snapshot() end,
+  { type = "key", key = "q" },
+})
+check(observed.failure:find("Keep this title", 1, true) and observed.failure:find("disk write failed", 1, true) and observed.failure:find("Create task (Todo)", 1, true), "event loop keeps create view and input after Store failure")
+check(observed.board:find("TODO", 1, true) ~= nil, "failed create can be cancelled back to board")
+fake.create_error = nil
+reset_editor()
+editor.exit_code = 1
+local cancelled_description = Task.new_create(80, 12)
+cancelled_description:handle_key("<CR>", fake)
+cancelled_description:handle_paste("Draft")
+cancelled_description:handle_key("<CR>", fake)
+cancelled_description:handle_key("<Tab>", fake)
+cancelled_description:handle_key("<CR>", fake)
+check(cancelled_description.task.description == "" and #editor.removes == 1, "cancelled create description editor preserves draft and cleans file")
+reset_editor()
+
+fake.result = board({ "task-1", "task-2", "task-3" })
+local deleting = Task.new({ id = "task-2", title = "Delete me", description = "", status = "todo" }, 80, 12)
+local deletes_before = fake.deletes or 0
+for _, key in ipairs({ "<Esc>", "n", "b", "q", "<Enter>" }) do
+  check(deleting:handle_key("d", fake) == true and deleting.confirm_delete, "d enters delete confirmation")
+  check(row(deleting:render(), 11):find("Delete this task? y/N", 1, true), "confirmation prompt rendered")
+  deleting:handle_key(key, fake)
+  check(not deleting.confirm_delete and (fake.deletes or 0) == deletes_before and fake.result.tasks["task-2"], "non-y cancels deletion without executing key")
+end
+for _, err in ipairs({ "malformed JSON", "task not found: task-2", "write failed" }) do
+  fake.delete_error = err
+  deleting:handle_key("d", fake)
+  check(deleting:handle_key("y", fake) == true and deleting.error == err and not deleting.confirm_delete, "delete failure stays in detail with retryable error")
+  check(row(deleting:render(), 10):find(err, 1, true), "delete failure rendered")
+end
+fake.delete_error = nil
+deleting:handle_key("d", fake)
+check(deleting:handle_key("y", fake) == "deleted" and fake.deleted_id == "task-2" and not fake.result.tasks["task-2"], "confirmed delete calls Store and returns deleted action")
+local no_delete_create = Task.new_create(80, 12)
+check(no_delete_create:handle_key("d", fake) == false and not no_delete_create.confirm_delete, "creation has no delete action")
+
+fake.result = board({ "task-1", "task-2", "task-3" })
+local delete_lists = fake.calls
+observed = {}
+run({ { type = "key", key = "j" }, { type = "key", key = "<Enter>" },
+  { type = "key", key = "d" }, { type = "key", key = "<Esc>" },
+  function() observed.cancel = snapshot() end,
+  { type = "key", key = "d" }, { type = "key", key = "n" },
+  { type = "key", key = "d" }, { type = "key", key = "y" },
+  function() observed.deleted = snapshot(); observed.selected = selected_title() end,
+  { type = "key", key = "q" },
+})
+check(observed.cancel:find("Title task-2", 1, true) and not observed.cancel:find("Delete this task?", 1, true), "Esc confirmation cancellation does not close detail window")
+check(fake.calls == delete_lists + 2 and observed.deleted:find("TODO(2)", 1, true) and not observed.deleted:find("Title task-2", 1, true), "deleted action reloads and returns to board")
+check(observed.selected:find("Title task-3", 1, true), "deleted middle task falls back to next task at same index")
+
+fake.result = board({ "task-1" })
+run({ { type = "key", key = "<Enter>" }, { type = "key", key = "d" }, { type = "key", key = "y" }, { type = "key", key = "<Enter>" }, { type = "key", key = "q" } })
+check(snapshot():find("TODO(0)", 1, true) and selected_title() == nil, "deleting last task leaves legal empty board selection")
+fake.result = board({ "task-1" })
+fake.delete_error = "disk write failed"
+observed = {}
+run({ { type = "key", key = "<Enter>" }, { type = "key", key = "d" }, { type = "key", key = "y" },
+  function() observed.failure = snapshot() end, { type = "key", key = "b" },
+  function() observed.back = snapshot() end, { type = "key", key = "q" },
+})
+check(observed.failure:find("disk write failed", 1, true) and observed.failure:find("Enter Edit", 1, true) and observed.back:find("TODO(1)", 1, true), "event loop keeps failed delete detail and permits returning to board")
+fake.delete_error = nil
+
+fake.result = board({ "task-1", "task-2", "task-3" })
+fake.result.tasks["task-1"].status = "doing"
+fake.result.tasks["task-2"].status = "doing"
+local moving = Board.new(80, 12)
+moving:reload(fake)
+moving:select_task("task-3")
+local move_lists, move_updates = fake.calls, #fake.updates
+for _, move in ipairs({ { "L", "doing", 2 }, { "L", "done", 3 }, { "H", "doing", 2 }, { "H", "todo", 1 } }) do
+  moving:handle_key(move[1], fake)
+  check(fake.result.tasks["task-3"].status == move[2] and moving._state.focused_column == move[3] and moving:selected_task().id == "task-3", "move changes status and follows ID into target column")
+  if move[2] == "doing" then check(moving._state.selected[2] == 3, "target selection uses moved ID rather than source index") end
+  local update = fake.updates[#fake.updates]
+  local fields = 0
+  for _ in pairs(update.patch) do fields = fields + 1 end
+  check(update.id == "task-3" and fields == 1 and update.patch.status == move[2], "move sends status-only patch")
+end
+check(fake.calls == move_lists + 4 and #fake.updates == move_updates + 4, "every successful move reloads board once")
+local boundary_updates, boundary_lists = #fake.updates, fake.calls
+moving:handle_key("H", fake)
+moving:handle_key("3", fake)
+moving:handle_key("L", fake)
+moving:handle_key("H", fake)
+check(#fake.updates == boundary_updates and fake.calls == boundary_lists, "boundary and empty-column moves are no-ops")
+moving:handle_key("1", fake)
+local navigation_updates = #fake.updates
+for _, key in ipairs({ "l", "<Right>", "h", "<Left>" }) do moving:handle_key(key, fake) end
+check(moving._state.focused_column == 1 and #fake.updates == navigation_updates, "lowercase and arrows only navigate columns")
+local before_id, before_index = moving:selected_task().id, moving._state.selected[1]
+fake.update_error = "move write failed"
+local failure_lists = fake.calls
+moving:handle_key("L", fake)
+check(moving._state.focused_column == 1 and moving._state.selected[1] == before_index and moving:selected_task().id == before_id and moving:selected_task().status == "todo" and fake.calls == failure_lists, "move failure leaves focus selection cards unchanged without reload")
+check(text(moving:render()[12]):find("move write failed", 1, true), "board displays move error")
+for _, size in ipairs({ { 20, 10 }, { 1, 1 }, { 80, 12 } }) do
+  moving:resize(size[1], size[2])
+  check(#moving:render() == size[2], "move error resize respects height")
+  for _, line in ipairs(moving:render()) do check(width(text(line)) <= size[1], "move error resize respects width") end
+end
+fake.update_error = nil
+fake.result.tasks[before_id].status = "done"
+fake.result.tasks[before_id].title = "External title"
+fake.result.tasks[before_id].description = "External description"
+moving:handle_key("L", fake)
+check(moving:selected_task().id == before_id and moving:selected_task().status == "doing" and moving:selected_task().title == "External title" and moving:selected_task().description == "External description", "stale board move preserves fresh external task body with status-only update")
+check(not moving._state.error_message, "successful reload clears move error")
+
+fake.result = board({ "task-1", "task-2" })
+fake.result.tasks["task-2"].status = "doing"
+observed = {}
+run({ { type = "key", key = "L" },
+  function() observed.first = selected_title(); observed.board = snapshot() end,
+  { type = "resize", width = 20, height = 10 }, { type = "key", key = "L" },
+  function() observed.narrow = snapshot(); observed.selected = selected_title() end,
+  { type = "key", key = "H" }, { type = "resize", width = 80, height = 12 },
+  function() observed.resized = snapshot(); observed.final = selected_title() end,
+  { type = "key", key = "q" },
+}, { cols = 30, rows = 15 })
+check(observed.board:find("DOING(2)", 1, true) and observed.first:find("Title task-1", 1, true), "single-column board focuses target and selects moved ID")
+check(observed.narrow:find("DONE(1)", 1, true) and observed.selected:find("Title task-1", 1, true), "consecutive L follows task through narrow board")
+check(observed.resized:find("DOING(2)", 1, true) and observed.final:find("Title task-1", 1, true), "H and resize retain moved selection")
+
+fake.result = board({ "task-1", "task-2", "task-3" })
+local board_delete = Board.new(80, 12)
+board_delete:reload(fake)
+board_delete:select_task("task-2")
+local board_deletes, board_lists = fake.deletes, fake.calls
+board_delete:handle_key("d", fake)
+check(board_delete._state.pending_delete_id == "task-2" and fake.deletes == board_deletes and fake.calls == board_lists, "board d records selected ID without deleting or reloading")
+check(row(board_delete:render(), 12):find("Delete this task? y/N", 1, true), "board renders delete confirmation")
+for _, size in ipairs({ { 20, 10 }, { 1, 1 }, { 80, 12 } }) do
+  board_delete:resize(size[1], size[2])
+  check(board_delete._state.pending_delete_id == "task-2" and #board_delete:render() == size[2], "board resize retains pending delete ID and height")
+  check(row(board_delete:render(), size[2]) == truncate("Delete this task? y/N", size[1]).head .. string.rep(" ", math.max(0, size[1] - #"Delete this task? y/N")), "board resize retains fitted confirmation prompt")
+  for _, line in ipairs(board_delete:render()) do check(width(text(line)) <= size[1], "board confirmation resize fits width") end
+end
+board_delete:handle_key("y", fake)
+check(fake.deleted_id == "task-2" and fake.deletes == board_deletes + 1 and fake.calls == board_lists + 1 and not board_delete._state.pending_delete_id, "board y deletes recorded ID and reloads once")
+check(board_delete:selected_task().id == "task-3" and board_delete._state.focused_column == 1 and board_delete._state.selected[1] == 2, "board middle deletion retains same index and focus")
+board_delete:handle_key("d", fake)
+board_delete:handle_key("y", fake)
+check(board_delete:selected_task().id == "task-1" and board_delete._state.selected[1] == 1, "board final-index deletion clamps to preceding task")
+board_delete:handle_key("d", fake)
+board_delete:handle_key("y", fake)
+check(not board_delete:selected_task() and board_delete._state.selected[1] == 1 and board_delete._state.offsets[1] == 0, "board last deletion leaves legal empty selection")
+board_deletes, board_lists = fake.deletes, fake.calls
+board_delete:handle_key("d", fake)
+check(not board_delete._state.pending_delete_id and fake.deletes == board_deletes and fake.calls == board_lists, "empty board d is a no-op")
+fake.error = "malformed JSON"
+board_delete:reload(fake)
+board_delete:handle_key("d", fake)
+check(not board_delete._state.pending_delete_id and not board_delete._state.valid and fake.deletes == board_deletes, "invalid board d is a no-op")
+fake.error = nil
+fake.result = board({ "task-1", "task-2", "task-3" })
+fake.result.tasks["task-2"].status = "doing"
+board_delete:reload(fake)
+board_delete:select_task("task-2")
+for _, key in ipairs({ "n", "<Esc>", "q", "<CR>", "<Enter>", "j", "k", "l", "h", "2", "H", "L", "r", "d", "Y" }) do
+  local cards, selected, offsets = board_delete._state.cards, board_delete._state.selected[2], board_delete._state.offsets[2]
+  board_delete:handle_key("d", fake)
+  check(board_delete:handle_key(key, fake) and not board_delete._state.pending_delete_id and board_delete._state.cards == cards and board_delete._state.focused_column == 2 and board_delete._state.selected[2] == selected and board_delete._state.offsets[2] == offsets and fake.deletes == board_deletes, "board confirmation consumes cancellation key " .. key)
+end
+board_delete:handle_key("d", fake)
+board_delete:reload(fake)
+check(not board_delete._state.pending_delete_id and not row(board_delete:render(), 12):find("Delete this task?", 1, true), "board reload clears pending confirmation")
+board_delete:handle_key("1", fake)
+board_delete:handle_key("j", fake)
+board_lists = fake.calls
+local failure_cards, failure_task = board_delete._state.cards, board_delete:selected_task()
+fake.delete_error = "delete write failed"
+board_delete:handle_key("d", fake)
+board_delete:handle_key("y", fake)
+check(board_delete._state.cards == failure_cards and board_delete:selected_task() == failure_task and board_delete._state.focused_column == 1 and board_delete._state.selected[1] == 2 and fake.calls == board_lists and not board_delete._state.pending_delete_id, "board delete failure retains cards focus selection without reload")
+check(board_delete._state.error_message == "delete write failed" and row(board_delete:render(), 12):find("delete write failed", 1, true), "board delete failure renders error")
+fake.delete_error = nil
+board_delete:handle_key("d", fake)
+board_delete:handle_key("y", fake)
+check(not fake.result.tasks[failure_task.id] and not board_delete._state.error_message, "board failed deletion can retry successfully")
+
+for _, key in ipairs({ "n", "<Esc>", "q", "<CR>", "<Enter>", "j", "l", "L", "r" }) do
+  fake.result = board({ "task-1", "task-2", "task-3" })
+  board_deletes, board_lists = fake.deletes, fake.calls
+  local reached = false
+  run({ { type = "key", key = "j" }, { type = "key", key = "d" },
+    function() check(snapshot():find("Delete this task? y/N", 1, true) and not snapshot():find("Enter Edit", 1, true) and fake.deletes == board_deletes, "event loop d confirms on board without immediate deletion") end,
+    { type = "key", key = key },
+    function()
+      reached = true
+      check(snapshot():find("TODO(3)", 1, true) and not snapshot():find("Delete this task?", 1, true) and selected_title():find("Title task-2", 1, true), "event loop consumes board cancellation " .. key)
+    end,
+    { type = "key", key = "q" },
+  })
+  check(reached and fake.deletes == board_deletes and fake.calls == board_lists + 1, "board cancellation does not close create open move or reload: " .. key)
+end
+fake.result = board({ "task-1", "task-2", "task-3" })
+board_lists = fake.calls
+run({ { type = "key", key = "j" }, { type = "key", key = "d" },
+  { type = "resize", width = 20, height = 10 },
+  function() check(row(last_buf.lines, 10) == truncate("Delete this task? y/N", 20).head and snapshot():find("TODO(3)", 1, true), "event loop narrow resize retains board confirmation") end,
+  { type = "key", key = "y" },
+  function() check(snapshot():find("TODO(2)", 1, true) and selected_title():find("Title task-3", 1, true), "event loop board y reloads and falls back at same index") end,
+  { type = "key", key = "q" },
+})
+check(fake.deleted_id == "task-2" and fake.calls == board_lists + 2, "event loop resize retains recorded deletion ID and reloads once")
+fake.result = board({ "task-1" })
+fake.delete_error = "board disk write failed"
+board_lists = fake.calls
+run({ { type = "key", key = "d" }, { type = "key", key = "y" },
+  function() check(snapshot():find("TODO(1)", 1, true) and snapshot():find("board disk write failed", 1, true) and selected_title():find("Title task-1", 1, true), "event loop delete failure stays board with selection and error"); fake.delete_error = nil end,
+  { type = "key", key = "d" }, { type = "key", key = "y" },
+  function() check(snapshot():find("TODO(0)", 1, true) and not selected_title(), "event loop board retry deletes last card") end,
+  { type = "key", key = "q" },
+})
+check(fake.calls == board_lists + 2, "event loop failed board delete does not reload before successful retry")
 
 print(string.format("%d passed, %d failed", passed, failed))
 if failed > 0 then os.exit(1) end

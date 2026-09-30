@@ -137,6 +137,11 @@ end
 
 local function refresh_lines(state)
   state.lines = state.valid and board_lines(state) or error_lines(state.error, state.width, state.height)
+  if state.pending_delete_id then
+    state.lines[state.height] = { styled(fit("Delete this task? y/N", state.width), maki.ui.theme_color("warning")) }
+  elseif state.valid and state.error_message then
+    state.lines[state.height] = { styled(fit("error: " .. state.error_message, state.width), maki.ui.theme_color("error")) }
+  end
 end
 
 function Board.new(width, height)
@@ -152,6 +157,12 @@ end
 
 function Board:reload(store)
   local state = self._state
+  state.error_message, state.pending_delete_id = nil, nil
+  local selected_ids = {}
+  for i, column in ipairs(COLUMNS) do
+    local task = state.cards[column.status][state.selected[i]]
+    selected_ids[i] = task and task.id
+  end
   local tasks, err = store:list()
   if not tasks then
     state.valid, state.error, state.tasks = false, err, {}
@@ -159,6 +170,11 @@ function Board:reload(store)
   else
     state.valid, state.error, state.tasks = true, nil, tasks
     state.cards = make_cards(tasks)
+    for i, column in ipairs(COLUMNS) do
+      for index, task in ipairs(state.cards[column.status]) do
+        if task.id == selected_ids[i] then state.selected[i] = index; break end
+      end
+    end
   end
   refresh_lines(state)
 end
@@ -175,6 +191,20 @@ end
 
 function Board:handle_key(key, store)
   local state = self._state
+  if state.pending_delete_id then
+    local id = state.pending_delete_id
+    state.pending_delete_id = nil
+    if key == "y" then
+      local deleted, err = store:delete(id)
+      if deleted then
+        self:reload(store)
+      else
+        state.error_message = tostring(err or "could not delete task")
+      end
+    end
+    refresh_lines(state)
+    return true
+  end
   local number = tonumber(key)
   if number and number >= 1 and number <= #COLUMNS then
     state.focused_column = number
@@ -182,11 +212,26 @@ function Board:handle_key(key, store)
     state.focused_column = state.focused_column % #COLUMNS + 1
   elseif key == "h" or key == "<Left>" then
     state.focused_column = (state.focused_column - 2) % #COLUMNS + 1
+  elseif key == "H" or key == "L" then
+    local task = self:selected_task()
+    local target = state.focused_column + (key == "H" and -1 or 1)
+    if not task or not COLUMNS[target] then return true end
+    local updated, err = store:update(task.id, { status = COLUMNS[target].status })
+    if not updated then
+      state.error_message = tostring(err or "could not move task")
+    else
+      self:reload(store)
+      self:select_task(task.id)
+    end
   elseif key == "j" or key == "<Down>" or key == "k" or key == "<Up>" then
     local i = state.focused_column
     local count = #state.cards[COLUMNS[i].status]
     state.selected[i] = math.max(1, math.min(count, state.selected[i] + ((key == "j" or key == "<Down>") and 1 or -1)))
     clamp_state(state)
+  elseif key == "d" then
+    local task = state.valid and self:selected_task()
+    if not task then return true end
+    state.pending_delete_id = task.id
   elseif key == "r" then
     self:reload(store)
     return true
@@ -195,6 +240,20 @@ function Board:handle_key(key, store)
   end
   refresh_lines(state)
   return true
+end
+
+function Board:select_task(id)
+  local state = self._state
+  for i, column in ipairs(COLUMNS) do
+    for index, task in ipairs(state.cards[column.status]) do
+      if task.id == id then
+        state.focused_column, state.selected[i] = i, index
+        refresh_lines(state)
+        return true
+      end
+    end
+  end
+  return false
 end
 
 function Board:selected_task()

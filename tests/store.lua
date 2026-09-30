@@ -541,6 +541,152 @@ local function test_read_reload()
   eq(list[1].title, "edited", "list reloads current file")
 end
 
+local function test_delete()
+  local path = fresh()
+  local s = Store.new(path)
+  s:create({ title = "A" })
+  s:create({ title = "B" })
+  s:create({ title = "C" })
+  s:list()
+  write_raw(path, '{"tasks":{"task-1":{"title":"A","description":"first","status":"done"},"task-2":{"title":"edited","description":"second","status":"doing"},"task-3":{"title":"C","description":"third","status":"todo"}}}')
+
+  local deleted, err = s:delete("task-2")
+  ok(deleted ~= nil, "delete succeeds: " .. tostring(err))
+  eq(deleted.id, "task-2", "delete returns id")
+  eq(deleted.title, "edited", "delete reloads current title")
+  eq(deleted.description, "second", "delete returns description")
+  eq(deleted.status, "doing", "delete returns status")
+  local fields = 0
+  for _ in pairs(deleted) do fields = fields + 1 end
+  eq(fields, 4, "delete returns only public fields")
+
+  local reloaded = Store.new(path)
+  local tasks = reloaded:list()
+  eq(#tasks, 2, "delete persisted removal")
+  eq(tasks[1].id, "task-1", "delete preserves first task")
+  eq(tasks[1].title, "A", "delete preserves first title")
+  eq(tasks[1].description, "first", "delete preserves first description")
+  eq(tasks[1].status, "done", "delete preserves first status")
+  eq(tasks[2].id, "task-3", "delete preserves third task")
+  eq(tasks[2].title, "C", "delete preserves third title")
+  eq(tasks[2].description, "third", "delete preserves third description")
+  eq(tasks[2].status, "todo", "delete preserves third status")
+  local got, gerr = reloaded:get("task-2")
+  eq(got, nil, "deleted task cannot be read")
+  eq(gerr, "task not found: task-2", "deleted task get error")
+  eq(s:create({ title = "replacement" }).id, "task-2", "create reuses first unused id")
+
+  for _, task in ipairs(s:list()) do
+    ok(s:delete(task.id) ~= nil, "delete remaining task")
+  end
+  eq(#Store.new(path):list(), 0, "delete last task persists empty board")
+  eq(s:create({ title = "restart" }).id, "task-1", "empty board starts at first unused id")
+end
+
+local function test_delete_rejected()
+  local path = fresh()
+  local s = Store.new(path)
+  local task, err = s:delete("task-9")
+  eq(task, nil, "delete on missing store nil")
+  eq(err, "task not found: task-9", "delete on missing store error")
+  eq(read_file(path), nil, "delete on missing store does not create file")
+  s:create({ title = "A" })
+  local before = read_file(path)
+  for _, id in ipairs({ "task-9", "" }) do
+    task, err = s:delete(id)
+    eq(task, nil, "delete unknown nil")
+    eq(err, "task not found: " .. id, "delete unknown error")
+    eq(read_file(path), before, "delete unknown preserves bytes")
+  end
+  for _, id in ipairs({ 1, false, {} }) do
+    task, err = s:delete(id)
+    eq(task, nil, "delete invalid id nil")
+    eq(err, "id must be a string", "delete invalid id error")
+    eq(read_file(path), before, "delete invalid id preserves bytes")
+  end
+  task, err = s:delete(nil)
+  eq(task, nil, "delete missing id nil")
+  eq(err, "id must be a string", "delete missing id error")
+  eq(read_file(path), before, "delete missing id preserves bytes")
+
+  for _, broken in ipairs({
+    "{ this is not json",
+    '{"tasks":{"task-1":{"title":"A"}}}',
+    '{"tasks":[{"title":"A","status":"todo"}]}',
+  }) do
+    write_raw(path, broken)
+    task, err = s:delete("task-1")
+    eq(task, nil, "delete malformed store nil")
+    ok(err and err:find("invalid kanban store", 1, true), "delete malformed store error")
+    eq(read_file(path), broken, "delete malformed store preserves bytes")
+  end
+end
+
+local function test_delete_persistence_failure()
+  local path = fresh()
+  local s = Store.new(path)
+  s:create({ title = "A" })
+  s:create({ title = "B" })
+  local before = read_file(path)
+  local failures = {
+    { maki.json, "encode", "could not encode store: injected failure" },
+    { maki.fs, "mkdir", "could not create store directory: injected failure" },
+    { maki.fs, "atomic_write", "could not write store: injected failure" },
+  }
+  for _, failure in ipairs(failures) do
+    local owner, key, expected = failure[1], failure[2], failure[3]
+    local original = owner[key]
+    owner[key] = function() return nil, "injected failure" end
+    local task, err = s:delete("task-1")
+    owner[key] = original
+    eq(task, nil, "delete persistence failure returns nil")
+    eq(err, expected, "delete propagates persistence failure")
+    eq(read_file(path), before, "delete persistence failure preserves bytes")
+    eq(s:get("task-1").title, "A", "failed delete preserves target")
+    eq(s:get("task-2").title, "B", "failed delete preserves other task")
+  end
+  ok(s:delete("task-1") ~= nil, "delete succeeds after persistence recovers")
+end
+
+local function test_delete_tool()
+  local registered = {}
+  local old_api, old_cwd = maki.api, maki.uv.cwd
+  maki.api = { register_tool = function(spec) registered[spec.name] = spec end }
+  local cwd = base .. "/tool-case"
+  maki.uv.cwd = function() return cwd end
+  require("kanban.tools").register()
+  maki.api, maki.uv.cwd = old_api, old_cwd
+
+  local tool = registered.task_delete
+  ok(tool ~= nil, "task_delete registered")
+  eq(tool.schema.type, "object", "task_delete object schema")
+  eq(tool.schema.properties.id.type, "string", "task_delete string id schema")
+  eq(tool.schema.required[1], "id", "task_delete requires id")
+  eq(#tool.schema.required, 1, "task_delete requires only id")
+  local properties = 0
+  for _ in pairs(tool.schema.properties) do properties = properties + 1 end
+  eq(properties, 1, "task_delete schema has only id")
+
+  local created = maki.json.decode(registered.task_create.handler({ title = "tool task", description = "details" }).llm_output)
+  local result = tool.handler({ id = created.id })
+  eq(result.is_error, nil, "task_delete success not an error")
+  local deleted = maki.json.decode(result.llm_output)
+  eq(deleted.id, created.id, "task_delete JSON id")
+  eq(deleted.title, "tool task", "task_delete JSON title")
+  eq(deleted.description, "details", "task_delete JSON description")
+  eq(deleted.status, "todo", "task_delete JSON status")
+  eq(#Store.new(cwd .. "/.maki/kanban.json"):list(), 0, "task_delete handler persists removal")
+  result = tool.handler({ id = created.id })
+  eq(result.is_error, true, "task_delete unknown is error")
+  eq(result.llm_output, "error: task not found: " .. created.id, "task_delete unknown error convention")
+  result = tool.handler({})
+  eq(result.is_error, true, "task_delete missing id is error")
+  eq(result.llm_output, "error: id must be a string", "task_delete missing id error convention")
+  result = tool.handler({ id = 1 })
+  eq(result.is_error, true, "task_delete invalid id is error")
+  eq(result.llm_output, "error: id must be a string", "task_delete invalid id error convention")
+end
+
 local tests = {
   test_missing,
   test_create_get_list,
@@ -550,6 +696,10 @@ local tests = {
   test_malformed,
   test_collision_no_overwrite,
   test_read_reload,
+  test_delete,
+  test_delete_rejected,
+  test_delete_persistence_failure,
+  test_delete_tool,
 }
 
 for _, test in ipairs(tests) do

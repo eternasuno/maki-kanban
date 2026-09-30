@@ -55,6 +55,14 @@ local function task_update(input)
   return json_output(task)
 end
 
+local function task_delete(input)
+  local task, err = store:delete(input.id)
+  if not task then
+    return failure(err)
+  end
+  return json_output(task)
+end
+
 local ID = { type = "string", description = "Task id from task_list or task_create." }
 local TITLE = { type = "string", description = "Short task title." }
 local DESCRIPTION = { type = "string", description = "Longer task details." }
@@ -96,6 +104,13 @@ function M.register()
       required = { "id" },
     },
     handler = task_update,
+  })
+
+  maki.api.register_tool({
+    name = "task_delete",
+    description = "Delete a kanban task by id. Returns the deleted task as JSON.",
+    schema = { type = "object", properties = { id = ID }, required = { "id" } },
+    handler = task_delete,
   })
 end
 

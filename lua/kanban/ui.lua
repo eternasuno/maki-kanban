@@ -46,9 +46,16 @@ function M.open()
           buf:set_lines(state.task:render())
         end
       elseif ev.type == "key" then
-        if (ev.key == "q" or ev.key == "<Esc>") and not (state.view == "task" and state.task.editing) then return end
+        if (ev.key == "q" or ev.key == "<Esc>") and not (state.view == "task" and (state.task.editing or state.task.creating or state.task.confirm_delete)) and not (state.view == "board" and state.board._state.pending_delete_id) then return end
         if state.view == "board" then
-          if ev.key == "<CR>" or ev.key == "<Enter>" then
+          if state.board._state.pending_delete_id then
+            state.board:handle_key(ev.key, store)
+            buf:set_lines(state.board:render())
+          elseif ev.key == "n" then
+            state.task = Task.new_create(state.width, state.height)
+            state.view = "task"
+            buf:set_lines(state.task:render())
+          elseif ev.key == "<CR>" or ev.key == "<Enter>" then
             local selected = state.board:selected_task()
             if selected then
               state.task = Task.new(selected, state.width, state.height)
@@ -60,7 +67,12 @@ function M.open()
           end
         else
           local action = state.task:handle_key(ev.key, store)
-          if action == "back" then
+          if action == "created" or action == "deleted" then
+            state.board:reload(store)
+            if action == "created" then state.board:select_task(state.task.task.id) end
+            state.view, state.task = "board", nil
+            buf:set_lines(state.board:render())
+          elseif action == "back" then
             state.view, state.task = "board", nil
             buf:set_lines(state.board:render())
           elseif action == "changed" then

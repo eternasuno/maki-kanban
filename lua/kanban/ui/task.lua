@@ -5,6 +5,7 @@ Task.__index = Task
 
 local FIELDS = { "title", "status", "description" }
 local STATUSES = { "todo", "doing", "done" }
+local CREATE_FIELDS = { "title", "description", "create" }
 
 local function styled(text, color, bold, background)
   return { text, { fg = color, bold = bold, bg = background } }
@@ -58,6 +59,12 @@ function Task.new(task, width, height)
   return self
 end
 
+function Task.new_create(width, height)
+  local self = Task.new({ title = "", description = "", status = "todo" }, width, height)
+  self.creating = true
+  return self
+end
+
 function Task:resize(width, height)
   self.width, self.height = math.max(0, width or 0), math.max(0, height or 0)
   local inner = math.max(0, self.width - 2)
@@ -103,6 +110,11 @@ function Task:_finish_edit()
 end
 
 function Task:_save(store, field, value)
+  if self.creating then
+    self.task[field] = value
+    self:_finish_edit()
+    return true
+  end
   local updated, err
   if store then updated, err = store:update(self.task.id, { [field] = value }) else err = "store unavailable" end
   if not updated then
@@ -145,7 +157,14 @@ function Task:_edit_description(store)
       self.error = tostring(read_err or "could not read temporary file")
     elseif text ~= original then
       local updated, update_err
-      if store then updated, update_err = store:update(self.task.id, { description = text }) else update_err = "store unavailable" end
+      if self.creating then
+        self.task.description = text
+        updated = self.task
+      elseif store then
+        updated, update_err = store:update(self.task.id, { description = text })
+      else
+        update_err = "store unavailable"
+      end
       if updated then
         self.task = updated
         changed = true
@@ -156,7 +175,7 @@ function Task:_edit_description(store)
   end
   maki.fs.rm(path)
   self:resize(self.width, self.height)
-  return changed and "changed" or true
+  return changed and not self.creating and "changed" or true
 end
 
 function Task:render()
@@ -176,7 +195,9 @@ function Task:render()
     elseif row == height then
       lines[row] = { styled("└" .. string.rep("─", inner) .. "┘", accent) }
     elseif row == height - 1 then
-      local footer_text = self.editing == "title" and "Enter Save   Esc Cancel" or self.editing == "status" and "←/→ Change   Enter Save   Esc Cancel" or "Enter Edit   b Back"
+      local footer_text = self.editing == "title" and "Enter Save   Esc Cancel" or self.editing == "status" and "←/→ Change   Enter Save   Esc Cancel" or "Enter Edit   d Delete   b Back"
+      if self.creating and not self.editing then footer_text = "Tab Title/Description/Create   Enter Select   Esc Cancel" end
+      if self.confirm_delete then footer_text = "Delete this task? y/N" end
       local footer = maki.ui.truncate_text(footer_text, inner).head
       local label = string.rep(" ", math.max(0, inner - maki.ui.display_width(footer))) .. footer
       lines[row] = { styled("│", accent), styled(label), styled("│", accent) }
@@ -191,8 +212,9 @@ function Task:render()
       elseif content_row == 3 then
         spans = { styled("├" .. string.rep("─", inner) .. "┤", accent) }
       elseif content_row == 4 then
-        local focused = self.focused_field == "status"
-        spans[#spans + 1] = styled(fit(self.status_text, inner), focused and focus_fg or self.status_color, true, focused and focus_bg)
+        local focused = self.focused_field == (self.creating and "create" or "status")
+        local label = self.creating and "Create task (Todo)" or self.status_text
+        spans[#spans + 1] = styled(fit(label, inner), focused and focus_fg or self.status_color, true, focused and focus_bg)
       elseif content_row == 5 then
         spans[#spans + 1] = styled(string.rep(" ", inner))
       else
@@ -218,6 +240,13 @@ function Task:handle_paste(text)
 end
 
 function Task:handle_key(key, store)
+  if self.confirm_delete then
+    self.confirm_delete = false
+    if key ~= "y" then return true end
+    local deleted, err = store:delete(self.task.id)
+    if not deleted then self.error = tostring(err or "could not delete task"); return true end
+    return "deleted"
+  end
   if self.editing == "title" then
     if key == "<Esc>" then self:_finish_edit(); return true end
     if key == "<CR>" or key == "<Enter>" then return self:_save(store, "title", self.title_input:value()) end
@@ -232,13 +261,30 @@ function Task:handle_key(key, store)
     else return false end
     self.status_draft = STATUSES[self.status_index]; self:resize(self.width, self.height); return true
   end
+  if self.creating and (key == "<Esc>" or key == "q") then return "back" end
+  if key == "d" and not self.creating then
+    self.confirm_delete, self.error = true, nil
+    return true
+  end
   if key == "<Tab>" or key == "<S-Tab>" then
+    local fields = self.creating and CREATE_FIELDS or FIELDS
     local current = 1
-    for i, field in ipairs(FIELDS) do if field == self.focused_field then current = i end end
-    local next_index = key == "<Tab>" and current % #FIELDS + 1 or (current - 2) % #FIELDS + 1
-    self.focused_field = FIELDS[next_index]
+    for i, field in ipairs(fields) do if field == self.focused_field then current = i end end
+    local next_index = key == "<Tab>" and current % #fields + 1 or (current - 2) % #fields + 1
+    self.focused_field = fields[next_index]
     return true
   elseif key == "<CR>" or key == "<Enter>" then
+    if self.creating and self.focused_field == "create" then
+      local created, err
+      if store then
+        created, err = store:create({ title = self.task.title, description = self.task.description })
+      else
+        err = "store unavailable"
+      end
+      if not created then self.error = tostring(err or "could not create task"); return true end
+      self.task = created
+      return "created"
+    end
     return self:_begin(store)
   elseif key == "b" then return "back"
   end

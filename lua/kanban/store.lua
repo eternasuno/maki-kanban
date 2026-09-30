@@ -311,4 +311,27 @@ function Store:update(id, input)
   return public(id, updated)
 end
 
+function Store:delete(id)
+  if type(id) ~= "string" then
+    return nil, "id must be a string"
+  end
+
+  local data, err = self:load()
+  if not data then
+    return nil, err
+  end
+
+  local body = data.tasks[id]
+  if not body then
+    return nil, "task not found: " .. id
+  end
+  data.tasks[id] = nil
+
+  local wok, werr = write_tasks(self.path, self.dir, data.tasks)
+  if not wok then
+    return nil, werr
+  end
+  return public(id, body)
+end
+
 return Store
