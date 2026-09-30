@@ -24,6 +24,7 @@ Restart Maki and approve the package and its `fs_read` / `fs_write` permissions.
 | Enter | Open Task Detail in the same window |
 | `<` / `>` | Move the selected task to the previous / next column |
 | `n` | Create a task |
+| `a` | Insert `[task:<id>] <title>` for the selected task into Maki input at its cursor (does not submit) |
 | `d` | Confirm task deletion |
 | `r` | Reload |
 | `?` | Open keybinding help |

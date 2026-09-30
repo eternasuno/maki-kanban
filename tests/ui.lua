@@ -4,6 +4,7 @@ package.path = root .. "/lua/?.lua;" .. package.path
 
 local TERM = { cols = 100, rows = 30 }
 local EVENTS, last_opts, last_buf, last_win = {}, nil, nil, nil
+local input_snapshot, input_edit_result, input_edit_error, notifications, input_edit_closed = nil, true, nil, {}, nil
 local function make_buf()
   local buf = { lines = {} }
   function buf:set_lines(lines)
@@ -101,11 +102,19 @@ _G.maki = { env = { state_dir = function() return "/tmp" end }, fs = {
     editor.editor_path = path
     return editor.exit_code
   end,
+  input = function() return input_snapshot end,
+  input_edit = function(opts)
+    input_edit_closed = last_win and last_win.closed
+    input_edit_opts = opts
+    return input_edit_result, input_edit_error
+  end,
   open_win = function(buf, opts)
     last_buf, last_opts, last_win = buf, opts, make_win(buf, opts)
     return last_win
   end,
-} }
+}, notify = function(message, level, opts)
+  notifications[#notifications + 1] = { message = message, level = level, opts = opts }
+end }
 
 local text_input = {}
 text_input.Result = { IGNORED = "ignored", CHANGED = "changed" }
@@ -228,6 +237,15 @@ for _, line in ipairs(last_buf.lines) do all[#all + 1] = text(line) end
 local joined = table.concat(all, "\n")
 check(joined:find("TODO · 3", 1, true) ~= nil and joined:find("DOING · 0", 1, true) ~= nil and joined:find("DONE · 0", 1, true) ~= nil and not joined:find("[1]", 1, true) and not joined:find("[2]", 1, true) and not joined:find("[3]", 1, true), "all three counted headers omit numeric shortcuts")
 check(last_opts.width == "90%" and last_opts.height == "90%", "window uses host-managed 90% dimensions")
+input_snapshot = { text = "ask ", cursor = 4, version = 7, session_id = "session-1" }
+input_edit_result, input_edit_error, notifications = true, nil, {}
+run({ { type = "key", key = "j" }, { type = "key", key = "a" } })
+check(last_win.closed and input_edit_closed and input_edit_opts.start == 4 and input_edit_opts.stop == 4 and input_edit_opts.text == "\n[task:task-2] Two" and input_edit_opts.cursor == 22 and input_edit_opts.version == 7 and input_edit_opts.session_id == "session-1", "a closes Kanban before inserting compact task reference at input cursor")
+check(#notifications == 0, "successful task reference does not notify")
+input_edit_result, input_edit_error, notifications = nil, "stale input", {}
+run({ { type = "key", key = "a" } })
+check(last_win.closed and #notifications == 1 and notifications[1].level == "error" and notifications[1].message:find("stale input", 1, true), "input edit failure is reported after Kanban closes")
+input_edit_result, input_edit_error, input_snapshot = true, nil, nil
 check(#last_buf.lines == 27 and width(all[1]) == 90, "100x30 terminal renders 90x27 content")
 check(all[1] == string.rep(" ", 90) and all[#all] == string.rep(" ", 90), "vertical padding is blank at top and bottom")
 check(all[2]:sub(1, 2) == "  " and all[2]:sub(-2) == "  ", "horizontal padding is blank at left and right")

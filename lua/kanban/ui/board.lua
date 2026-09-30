@@ -113,6 +113,7 @@ local HELP = {
   "  Enter       open task",
   "  < / >       move task",
   "  n           create task",
+  "  a           reference task in input",
   "  d           delete task",
   "  r           reload",
   "  q / Esc     close kanban",

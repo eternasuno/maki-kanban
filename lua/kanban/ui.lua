@@ -52,6 +52,26 @@ function M.open()
             buf:set_lines(state.board:render())
           elseif ev.key == "q" or ev.key == "<Esc>" or ev.key == "<C-c>" then
             return
+          elseif ev.key == "a" and state.board:selected_task() then
+            local task = state.board:selected_task()
+            local reference = "[task:" .. task.id .. "] " .. task.title
+            win:close()
+            open_win = nil
+            local input, input_err = maki.ui.input()
+            if not input then
+              maki.notify("Could not reference task in Maki input: " .. tostring(input_err or "input unavailable"), "error", { title = "Kanban" })
+              return
+            end
+            local separator = input.text ~= "" and not input.text:sub(1, input.cursor):match("\n$") and "\n" or ""
+            local inserted, edit_err = maki.ui.input_edit({
+              start = input.cursor, stop = input.cursor, text = separator .. reference,
+              cursor = input.cursor + #separator + #reference,
+              version = input.version, session_id = input.session_id,
+            })
+            if not inserted then
+              maki.notify("Could not reference task in Maki input: " .. tostring(edit_err or "input edit failed"), "error", { title = "Kanban" })
+            end
+            return
           elseif ev.key == "n" then
             state.task = Task.new_create(state.width, state.height)
             state.view = "task"
