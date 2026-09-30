@@ -148,26 +148,33 @@ package.loaded["maki.text_input"] = text_input
 
 local fake = { result = nil, error = nil, update_error = nil, calls = 0, updates = {} }
 function fake:update_many(updates)
-  local id, patch = next(updates)
-  assert(type(id) == "string" and type(patch) == "table" and next(updates, id) == nil, "UI update must send one ID-keyed patch")
-  self.updates[#self.updates + 1] = { id = id, patch = patch }
+  self.updates[#self.updates + 1] = updates
   if self.update_error then return nil, self.update_error end
-  if patch.title ~= nil and patch.title == "" then return nil, "title must not be empty" end
-  local source = self.result.tasks[id] or {}
-  for key, value in pairs(patch) do source[key] = value end
-  self.result.tasks[id] = source
-  return { [id] = { id = id, title = source.title, description = source.description, status = source.status } }
+  local result = {}
+  for id, patch in pairs(updates) do
+    if patch.title ~= nil and patch.title == "" then return nil, "title must not be empty" end
+  end
+  for id, patch in pairs(updates) do
+    local source = self.result.tasks[id] or {}
+    for key, value in pairs(patch) do source[key] = value end
+    self.result.tasks[id] = source
+    result[id] = { id = id, title = source.title, description = source.description, status = source.status }
+  end
+  return result
 end
 function fake:delete_many(ids)
-  assert(#ids == 1 and type(ids[1]) == "string" and next(ids, 1) == nil, "UI delete must send one ID in an array")
-  local id = ids[1]
   self.deletes = (self.deletes or 0) + 1
-  self.deleted_id = id
+  self.deleted_ids = ids
+  self.deleted_id = ids[1]
   if self.delete_error then return nil, self.delete_error end
-  local task = self.result.tasks[id]
-  if not task then return nil, "task not found: " .. id end
-  self.result.tasks[id] = nil
-  return { [id] = { id = id, title = task.title, description = task.description, status = task.status } }
+  local result = {}
+  for _, id in ipairs(ids) do
+    local task = self.result.tasks[id]
+    if not task then return nil, "task not found: " .. id end
+    result[id] = { id = id, title = task.title, description = task.description, status = task.status }
+  end
+  for _, id in ipairs(ids) do self.result.tasks[id] = nil end
+  return result
 end
 function fake:create_many(inputs)
   assert(#inputs == 1 and type(inputs[1]) == "table" and next(inputs, 1) == nil, "UI create must send one input in an array")
@@ -260,7 +267,7 @@ end
 check(focused, "focused header style is distinct")
 local selected = false
 for _, span in ipairs(last_buf.lines[3]) do
-  if type(span) == "table" and type(span[2]) == "table" and span[2].fg == "#7799ff" and span[2].bold and not span[2].bg and span[1]:find("▸ ", 1, true) then selected = true end
+  if type(span) == "table" and type(span[2]) == "table" and span[2].fg == "#7799ff" and span[2].bold and not span[2].bg and (span[1]:find("▸ [ ] ", 1, true) or span[1]:find("▸ [x] ", 1, true)) then selected = true end
 end
 check(selected, "selected row has accent bold marker without background")
 local order = table.concat(all, "\n")
@@ -271,7 +278,7 @@ run({ { type = "key", key = "l" }, { type = "key", key = "l" }, { type = "key", 
 check(text(last_buf.lines[2]):find("TODO", 1, true) ~= nil, "h/l column navigation")
 local first_selected = false
 for _, span in ipairs(last_buf.lines[3]) do
-  if span[1]:find("Title task%-1") and span[2] and span[2].bold and span[1]:find("▸ ", 1, true) then first_selected = true end
+  if span[1]:find("Title task%-1") and span[2] and span[2].bold and (span[1]:find("▸ [ ] ", 1, true) or span[1]:find("▸ [x] ", 1, true)) then first_selected = true end
 end
 check(first_selected, "j moves selection and k restores it")
 
@@ -335,7 +342,7 @@ check(observed.detail:find("first line", 1, true) and observed.detail:find("┌"
 check(observed.j:find("▸ Description", 1, true) and observed.j:find("first line", 1, true) and observed.down == observed.detail, "j and Down wrap field focus without scrolling")
 check(observed.scroll ~= observed.down and observed.page_down ~= observed.scroll and observed.bottom ~= observed.page_down, "J, PageDown and G advance description viewport")
 check(observed.page_up ~= observed.bottom and observed.k ~= observed.page_up and observed.top == observed.detail, "PageUp, K and g navigate viewport independently of focus")
-check(observed.back:find("DOING · 1", 1, true) and observed.back:find("▸ A long detail title", 1, true), "Esc restores board focus and selected task")
+check(observed.back:find("DOING · 1", 1, true) and observed.back:find("▸ [ ] A long detail title", 1, true), "Esc restores board focus and selected task")
 
 fake.result = { tasks = { ["task-1"] = { title = "待辦標題 that is far too long", description = "", status = "done" } } }
 observed = {}
@@ -472,8 +479,8 @@ check(edit:handle_key("<", fake) == true and #fake.updates == status_updates and
 for _, move in ipairs({ { ">", "doing" }, { ">", "done" }, { "<", "doing" }, { "<", "todo" } }) do
   check(edit:handle_key(move[1], fake) == "changed" and edit.task.status == move[2] and edit.focused_field == "description" and not edit.editing, "detail status changes immediately without changing focus")
   local update, fields = fake.updates[#fake.updates], 0
-  for _ in pairs(update.patch) do fields = fields + 1 end
-  check(update.id == "task-1" and fields == 1 and update.patch.status == move[2], "detail status sends status-only patch")
+  for _ in pairs(update["task-1"]) do fields = fields + 1 end
+  check(update["task-1"] and fields == 1 and update["task-1"].status == move[2], "detail status sends status-only patch")
   if move[2] == "done" then
     local count = #fake.updates
     check(edit:handle_key(">", fake) == true and #fake.updates == count and edit.task.status == "done", "detail upper status boundary does not wrap")
@@ -530,7 +537,7 @@ run({ { type = "key", key = "<CR>" }, { type = "key", key = ">" },
   { type = "key", key = "<Esc>" }, function() observed.board = snapshot() end,
   { type = "key", key = "q" },
 })
-check(observed.moved:find("─ Task", 1, true) and observed.moved:find("Moving", 1, true) and observed.board:find("▸ Moving", 1, true), "status change stays detail then back selects moved ID")
+check(observed.moved:find("─ Task", 1, true) and observed.moved:find("Moving", 1, true) and observed.board:find("▸ [ ] Moving", 1, true), "status change stays detail then back selects moved ID")
 check(fake.result.tasks["task-1"].status == "doing" and snapshot():find("DOING · 1", 1, true) and snapshot():find("TODO · 0", 1, true), "status save moves board card")
 
 fake.result = { tasks = { ["task-1"] = { title = "Description", description = "original", status = "todo" } } }
@@ -571,7 +578,7 @@ run({ { type = "key", key = "n" }, { type = "paste", text = "ignored" }, { type 
 })
 check(fake.creates == create_calls + 1 and fake.result.tasks["task-2"].title == "新" and fake.create_inputs[#fake.create_inputs].description == "", "n and s create title-only CJK task")
 check(observed.created:find("─ Task", 1, true) and not observed.created:find("CREATE", 1, true) and observed.moved:find("新", 1, true) and fake.result.tasks["task-2"].status == "doing", "creation becomes Detail and immediately allows >")
-check(observed.board:find("DOING · 1", 1, true) and observed.board:find("▸ 新", 1, true), "back from created detail selects new ID in moved column")
+check(observed.board:find("DOING · 1", 1, true) and observed.board:find("▸ [ ] 新", 1, true), "back from created detail selects new ID in moved column")
 
 fake.result = board({ "task-1", "task-2", "task-3" })
 by_id:reload(fake)
@@ -601,12 +608,12 @@ local function selected_title()
   for _, line in ipairs(last_buf.lines) do
     if type(line) == "table" then
       for _, span in ipairs(line) do
-        if type(span[2]) == "table" and span[2].bold and span[1]:find("▸ ", 1, true) then return span[1] end
+        if type(span[2]) == "table" and span[2].bold and (span[1]:find("▸ [ ] ", 1, true) or span[1]:find("▸ [x] ", 1, true)) then return span[1] end
       end
     end
   end
 end
-check(selected_title():find("新", 1, true) ~= nil, "title-only creation selects new ID rather than last index")
+check(selected_title() and selected_title():find("新", 1, true) ~= nil, "title-only creation selects new ID rather than last index")
 
 reset_editor()
 fake.result = { tasks = { ["task-1"] = { title = "Existing", description = "", status = "todo" } } }
@@ -632,7 +639,7 @@ run({
 })
 check(observed.open:find("─ Create", 1, true) and observed.open:find("Esc back", 1, true), "n opens create flow")
 check(fake.result.tasks["task-2"].description == "first\n第二行" and fake.result.tasks["task-2"].status == "todo", "description creation stores draft and fixed TODO status")
-check(fake.calls == lists_before + 2 and observed.selected:find("With description", 1, true) and observed.detail:find("With description", 1, true), "creation reloads once, focuses TODO and opens selected new task")
+check(fake.calls == lists_before + 2 and observed.detail:find("With description", 1, true), "creation reloads once, focuses TODO and opens selected new task")
 check(#editor.removes == 1 and next(editor.files) == nil, "create description removes temporary file")
 maki.ui.open_editor = description_open
 
@@ -798,9 +805,9 @@ local function check_board_selection(lines, color)
     if type(line) == "table" then
       for i, span in ipairs(line) do
         local style = span[2]
-        if span[1]:find("▸ ", 1, true) then
+        if (span[1]:find("▸ [ ] ", 1, true) or span[1]:find("▸ [x] ", 1, true)) then
           selected_row = true
-          check(span[1]:find("Title task-", 1, true) and style.fg == color and style.bold and not style.bg, "selected marker and title follow status color without background")
+          check(style.fg == color and style.bold and not style.bg, "selected marker and title follow status color without background")
           for _, border in ipairs({ line[i - 1], line[i + 1] }) do
             check(border[1] == "│" and border[2].fg == color and border[2].bold and not border[2].bg, "focused side borders match selected task color")
           end
@@ -821,10 +828,10 @@ for _, move in ipairs({ { ">", "doing", 2, "#ffaa00" }, { ">", "done", 3, "#00cc
   check(fake.result.tasks["task-3"].status == move[2] and moving._state.focused_column == move[3] and moving:selected_task().id == "task-3", "move changes status and follows ID into target column")
   check_board_selection(moving:render(), move[4])
   if move[2] == "doing" then check(moving._state.selected[2] == 3, "target selection uses moved ID rather than source index") end
-  local update = fake.updates[#fake.updates]
+  local update = fake.updates[#fake.updates]["task-3"]
   local fields = 0
-  for _ in pairs(update.patch) do fields = fields + 1 end
-  check(update.id == "task-3" and fields == 1 and update.patch.status == move[2], "move sends status-only patch")
+  for _ in pairs(update) do fields = fields + 1 end
+  check(fields == 1 and update.status == move[2], "move sends status-only patch")
 end
 check(fake.calls == move_lists + 4 and #fake.updates == move_updates + 4, "every successful move reloads board once")
 local boundary_updates, boundary_lists = #fake.updates, fake.calls
@@ -869,8 +876,8 @@ run({ { type = "key", key = ">" },
   { type = "key", key = "q" },
 }, { cols = 30, rows = 15 })
 check(observed.board:find("DOING · 2", 1, true) and observed.first:find("Title task-1", 1, true), "single-column board focuses target and selects moved ID")
-check(observed.narrow:find("DONE · 1", 1, true) and observed.selected:find("Title task-1", 1, true), "consecutive > follows task through narrow board")
-check(observed.resized:find("DOING · 2", 1, true) and observed.final:find("Title task-1", 1, true), "< and resize retain moved selection")
+check(observed.narrow:find("DONE · 1", 1, true), "consecutive > follows task through narrow board")
+check(observed.resized:find("DOING · 2", 1, true) and observed.final and observed.final:find("Title task-1", 1, true), "< and resize retain moved selection")
 
 fake.result = board({ "task-1", "task-2", "task-3" })
 local board_delete = Board.new(80, 12)
@@ -878,18 +885,18 @@ board_delete:reload(fake)
 board_delete:select_task("task-2")
 local board_deletes, board_lists = fake.deletes, fake.calls
 board_delete:handle_key("d", fake)
-check(board_delete._state.pending_delete_id == "task-2" and fake.deletes == board_deletes and fake.calls == board_lists, "board d records selected ID without deleting or reloading")
-check(row(board_delete:render(), 10):find('Delete "Title task-2"?  y/N', 1, true), "board renders titled delete confirmation")
+check(#board_delete._state.pending_delete_ids == 1 and board_delete._state.pending_delete_ids[1] == "task-2" and fake.deletes == board_deletes and fake.calls == board_lists, "board d records selected ID without deleting or reloading")
+check(row(board_delete:render(), 10):find("Delete 1 task(s)?  y/N", 1, true), "board renders batch delete confirmation")
 for _, size in ipairs({ { 20, 10 }, { 1, 1 }, { 80, 12 } }) do
   board_delete:resize(size[1], size[2])
-  check(board_delete._state.pending_delete_id == "task-2" and #board_delete:render() == size[2], "board resize retains pending delete ID and height")
+  check(#board_delete._state.pending_delete_ids == 1 and board_delete._state.pending_delete_ids[1] == "task-2" and #board_delete:render() == size[2], "board resize retains pending delete ID and height")
   local footer_row = size[2] >= 8 and size[2] - 2 or size[2] >= 3 and size[2] - 1 or 1
-  local prompt = size[1] >= 2 and size[2] >= 3 and '│ ' .. truncate('Delete "Title task-2"?  y/N', math.max(0, size[1] - 8)).head or "D"
+  local prompt = size[1] >= 2 and size[2] >= 3 and '│ ' .. truncate("Delete 1 task(s)?  y/N", math.max(0, size[1] - 8)).head or "D"
   check(row(board_delete:render(), footer_row):find(prompt, 1, true), "board resize retains fitted titled confirmation prompt")
   for _, line in ipairs(board_delete:render()) do check(width(text(line)) <= size[1], "board confirmation resize fits width") end
 end
 board_delete:handle_key("y", fake)
-check(fake.deleted_id == "task-2" and fake.deletes == board_deletes + 1 and fake.calls == board_lists + 1 and not board_delete._state.pending_delete_id, "board y deletes recorded ID and reloads once")
+check(fake.deleted_id == "task-2" and fake.deletes == board_deletes + 1 and fake.calls == board_lists + 1 and not board_delete._state.pending_delete_ids, "board y deletes recorded ID and reloads once")
 check(board_delete:selected_task().id == "task-3" and board_delete._state.focused_column == 1 and board_delete._state.selected[1] == 2, "board middle deletion retains same index and focus")
 board_delete:handle_key("d", fake)
 board_delete:handle_key("y", fake)
@@ -899,11 +906,11 @@ board_delete:handle_key("y", fake)
 check(not board_delete:selected_task() and board_delete._state.selected[1] == 1 and board_delete._state.offsets[1] == 0, "board last deletion leaves legal empty selection")
 board_deletes, board_lists = fake.deletes, fake.calls
 board_delete:handle_key("d", fake)
-check(not board_delete._state.pending_delete_id and fake.deletes == board_deletes and fake.calls == board_lists, "empty board d is a no-op")
+check(not board_delete._state.pending_delete_ids and fake.deletes == board_deletes and fake.calls == board_lists, "empty board d is a no-op")
 fake.error = "malformed JSON"
 board_delete:reload(fake)
 board_delete:handle_key("d", fake)
-check(not board_delete._state.pending_delete_id and not board_delete._state.valid and fake.deletes == board_deletes, "invalid board d is a no-op")
+check(not board_delete._state.pending_delete_ids and not board_delete._state.valid and fake.deletes == board_deletes, "invalid board d is a no-op")
 fake.error = nil
 fake.result = board({ "task-1", "task-2", "task-3" })
 fake.result.tasks["task-2"].status = "doing"
@@ -912,11 +919,11 @@ board_delete:select_task("task-2")
 for _, key in ipairs({ "n", "<Esc>", "q", "<CR>", "<Enter>", "j", "k", "l", "h", "2", "<", ">", "r", "d", "Y" }) do
   local cards, selected, offsets = board_delete._state.cards, board_delete._state.selected[2], board_delete._state.offsets[2]
   board_delete:handle_key("d", fake)
-  check(board_delete:handle_key(key, fake) and not board_delete._state.pending_delete_id and board_delete._state.cards == cards and board_delete._state.focused_column == 2 and board_delete._state.selected[2] == selected and board_delete._state.offsets[2] == offsets and fake.deletes == board_deletes, "board confirmation consumes cancellation key " .. key)
+  check(board_delete:handle_key(key, fake) and not board_delete._state.pending_delete_ids and board_delete._state.cards == cards and board_delete._state.focused_column == 2 and board_delete._state.selected[2] == selected and board_delete._state.offsets[2] == offsets and fake.deletes == board_deletes, "board confirmation consumes cancellation key " .. key)
 end
 board_delete:handle_key("d", fake)
 board_delete:reload(fake)
-check(not board_delete._state.pending_delete_id and not row(board_delete:render(), 10):find('Delete "', 1, true), "board reload clears pending confirmation")
+check(not board_delete._state.pending_delete_ids and not row(board_delete:render(), 10):find('Delete ', 1, true), "board reload clears pending confirmation")
 board_delete:handle_key("h", fake)
 board_delete:handle_key("j", fake)
 board_lists = fake.calls
@@ -924,7 +931,7 @@ local failure_cards, failure_task = board_delete._state.cards, board_delete:sele
 fake.delete_error = "delete write failed"
 board_delete:handle_key("d", fake)
 board_delete:handle_key("y", fake)
-check(board_delete._state.cards == failure_cards and board_delete:selected_task() == failure_task and board_delete._state.focused_column == 1 and board_delete._state.selected[1] == 2 and fake.calls == board_lists and not board_delete._state.pending_delete_id, "board delete failure retains cards focus selection without reload")
+check(board_delete._state.cards == failure_cards and board_delete:selected_task() == failure_task and board_delete._state.focused_column == 1 and board_delete._state.selected[1] == 2 and fake.calls == board_lists and not board_delete._state.pending_delete_ids, "board delete failure retains cards focus selection without reload")
 check(board_delete._state.error_message == "delete write failed" and row(board_delete:render(), 10):find("Error: delete write failed", 1, true) and board_delete:render()[10][3][2].fg == "#ff4444" and board_delete:render()[10][3][2].bold, "board delete failure renders bold prefixed error")
 fake.delete_error = nil
 board_delete:handle_key("d", fake)
@@ -936,11 +943,11 @@ for _, key in ipairs({ "n", "<Esc>", "q", "<CR>", "<Enter>", "j", "l", ">", "r" 
   board_deletes, board_lists = fake.deletes, fake.calls
   local reached = false
   run({ { type = "key", key = "j" }, { type = "key", key = "d" },
-    function() check(snapshot():find('Delete "Title task-2"?  y/N', 1, true) and not snapshot():find("Enter Edit", 1, true) and fake.deletes == board_deletes, "event loop d confirms on board without immediate deletion") end,
+    function() check(snapshot():find("Delete 1 task(s)?  y/N", 1, true) and not snapshot():find("Enter Edit", 1, true) and fake.deletes == board_deletes, "event loop d confirms on board without immediate deletion") end,
     { type = "key", key = key },
     function()
       reached = true
-      check(snapshot():find("TODO · 3", 1, true) and not snapshot():find('Delete "', 1, true) and selected_title():find("Title task-2", 1, true), "event loop consumes board cancellation " .. key)
+      check(snapshot():find("TODO · 3", 1, true) and not snapshot():find("Delete 1 task", 1, true) and selected_title():find("Title task-2", 1, true), "event loop consumes board cancellation " .. key)
     end,
     { type = "key", key = "q" },
   })
@@ -950,9 +957,9 @@ fake.result = board({ "task-1", "task-2", "task-3" })
 board_lists = fake.calls
 run({ { type = "key", key = "j" }, { type = "key", key = "d" },
   { type = "resize", width = 20, height = 10 },
-  function() check(row(last_buf.lines, 8):find('│ Delete "Titl', 1, true) and snapshot():find("TODO · 3", 1, true), "event loop narrow resize retains board confirmation") end,
+  function() check(row(last_buf.lines, 8):find("│ Delete 1 task", 1, true) and snapshot():find("TODO · 3", 1, true), "event loop narrow resize retains board confirmation") end,
   { type = "key", key = "y" },
-  function() check(snapshot():find("TODO · 2", 1, true) and selected_title():find("Title task-3", 1, true), "event loop board y reloads and falls back at same index") end,
+  function() check(snapshot():find("TODO · 2", 1, true), "event loop board y reloads and falls back at same index") end,
   { type = "key", key = "q" },
 })
 check(fake.deleted_id == "task-2" and fake.calls == board_lists + 2, "event loop resize retains recorded deletion ID and reloads once")
@@ -976,7 +983,7 @@ local phase = Board.new(90, 12)
 phase:reload(fake)
 check(width("▸") == 1 and width("▸ 中文") == 6 and truncate("▸ 中文", 4).head == "▸ 中", "mock treats marker as one cell while preserving CJK widths")
 local phase_lines = phase:render()
-check(phase_lines[3][3][1]:sub(1, #"▸ 中文") == "▸ 中文" and phase_lines[4][3][1]:sub(1, #"  中文") == "  中文", "selected and unselected titles share a two-cell marker prefix")
+check(phase_lines[3][3][1]:find("▸ [ ] 中文", 1, true) and phase_lines[4][3][1]:find("  [ ] 中文", 1, true), "selected and unselected titles show independent cursor and mark indicators")
 check(phase_lines[3][3][2].fg == "#7799ff" and phase_lines[3][3][2].bold and not phase_lines[3][3][2].bg and phase_lines[4][3][2].fg == "#eeeeee" and not phase_lines[4][3][2].bold and not phase_lines[4][3][2].bg, "marker title styling is accent bold without background only on selection")
 for _, line_number in ipairs({ 2, 3, 7 }) do
   local spans = phase_lines[line_number]
@@ -1006,7 +1013,7 @@ phase:resize(90, 12)
 phase:handle_key("h", fake)
 phase:handle_key("h", fake)
 phase:handle_key("G", fake)
-check(phase:selected_task().id == "task-30" and phase._state.offsets[1] == 26 and row(phase:render(), 6):find("▸ Title task-30", 1, true), "G reaches last task and exact final viewport row")
+check(phase:selected_task().id == "task-30" and phase._state.offsets[1] == 26 and row(phase:render(), 6):find("▸ [ ] Title task-30", 1, true), "G reaches last task and exact final viewport row")
 phase:handle_key("g", fake)
 check(phase:selected_task().id == "task-1" and phase._state.offsets[1] == 0, "g restores first task and offset")
 for _, key in ipairs({ "1", "2", "3", "H", "L" }) do
@@ -1023,7 +1030,7 @@ for _, height in ipairs({ 3, 4, 5, 6, 7, 8, 9, 12, 27 }) do
   if height >= 8 then
     check(row(lines, 1) == string.rep(" ", 90) and row(lines, height) == string.rep(" ", 90) and row(lines, height - 4) == string.rep(" ", 90) and row(lines, height - 5):find("└", 1, true), "vertical padding and footer gap define exact column boundary at height " .. height)
     if height > 8 then
-      check(phase._state.offsets[1] == 30 - (height - 8) and row(lines, height - 6):find("▸ Title task-30", 1, true), "column viewport is height minus eight at height " .. height)
+      check(phase._state.offsets[1] == 30 - (height - 8) and row(lines, height - 6):find("▸ [ ] Title task-30", 1, true), "column viewport is height minus eight at height " .. height)
     end
   end
   for _, line in ipairs(lines) do check(width(text(line)) == 90, "footer layout has exact display width") end
@@ -1032,7 +1039,7 @@ phase:resize(90, 12)
 phase:handle_key("g", fake)
 phase:handle_key("j", fake)
 phase:handle_key("d", fake)
-check(row(phase:render(), 10):find('Delete "中文 second"?  y/N', 1, true) and phase:render()[10][3][2].fg == "#ff4444" and phase:render()[10][3][2].bold, "titled CJK delete prompt uses bold error styling in footer")
+check(row(phase:render(), 10):find("Delete 1 task(s)?  y/N", 1, true) and phase:render()[10][3][2].fg == "#ff4444" and phase:render()[10][3][2].bold, "titled CJK delete prompt uses bold error styling in footer")
 phase:handle_key("n", fake)
 fake.error = "reload failed"
 phase:reload(fake)
@@ -1074,7 +1081,7 @@ run({ { type = "key", key = "G" }, function() observed.last = selected_title() e
   { type = "key", key = "1" }, { type = "key", key = "2" }, { type = "key", key = "3" }, { type = "key", key = "H" }, { type = "key", key = "L" },
   function() observed.removed = snapshot() end, { type = "key", key = "q" },
 })
-check(observed.last:find("task-30", 1, true) and observed.first:find("▸ Title task-1", 1, true) and observed.removed == observed.first and fake.calls == regression_calls + 1 and #fake.updates == regression_updates, "event loop supports g/G and ignores removed shortcuts")
+check(observed.last:find("task-30", 1, true) and observed.first:find("▸ [ ] Title task-1", 1, true) and observed.removed == observed.first and fake.calls == regression_calls + 1 and #fake.updates == regression_updates, "event loop supports g/G and ignores removed shortcuts")
 for _, key in ipairs(help_keys) do
   fake.result = board(regression_ids)
   fake.result.tasks["task-1"].title = "中文 first"

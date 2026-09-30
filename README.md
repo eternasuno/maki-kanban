@@ -22,15 +22,16 @@ Restart Maki and approve the package and its `fs_read` / `fs_write` permissions.
 | `j` / Down, `k` / Up | Next / previous task |
 | `g` / `G` | First / last task in the focused column |
 | Enter | Open Task Detail in the same window |
-| `<` / `>` | Move the selected task to the previous / next column |
+| Space | Mark / unmark the selected task |
+| `<` / `>` | Move marked tasks one status step, or the selected task if none are marked |
 | `n` | Create a task |
-| `a` | Insert `[task:<id>] <title>` for the selected task into Maki input at its cursor (does not submit) |
-| `d` | Confirm task deletion |
+| `a` | Insert `[task:<id>] <title>` references for marked tasks (one per line), or the selected task, into Maki input at its cursor (does not submit) |
+| `d` | Confirm deletion of marked tasks, or selected task if none are marked |
 | `r` | Reload |
 | `?` | Open keybinding help |
 | `q` / Esc / Ctrl-C | Close kanban |
 
-Moves do not wrap at either edge. After a successful move, focus and selection follow the task by ID; failures preserve selection and display an error. Column navigation never moves tasks. The former `1`/`2`/`3` and uppercase `H`/`L` Board bindings are removed.
+Marked state is separate from cursor selection and survives reloads while task IDs still exist. Marks render as `[x]` independently of the `▸` cursor marker. Marked tasks move one status step relative to their own current status; the entire move is rejected if any marked task is at that boundary. Batch delete is confirmed and all-or-nothing. With no marks, move/delete/reference retain single-task behavior. Successful single-task moves follow that task by ID. The former `1`/`2`/`3` and uppercase `H`/`L` Board bindings are removed.
 
 `?` opens the modal keybinding help overlay; see the modal-key rules below.
 

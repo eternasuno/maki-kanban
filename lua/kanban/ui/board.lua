@@ -111,10 +111,11 @@ local HELP = {
   "",
   "Actions",
   "  Enter       open task",
-  "  < / >       move task",
+  "  Space       mark / unmark task",
+  "  < / >       move task(s)",
   "  n           create task",
   "  a           reference task in input",
-  "  d           delete task",
+  "  d           delete task(s)",
   "  r           reload",
   "  q / Esc     close kanban",
   "  Ctrl-C      quit kanban",
@@ -180,7 +181,8 @@ local function board_lines(state)
         local index = state.offsets[i] + row
         local task = state.cards[COLUMNS[i].status][index]
         local selected = task and i == state.focused_column and index == state.selected[i]
-        local marker = selected and "▸ " or string.rep(" ", marker_width)
+        local marked = task and state.marked[task.id]
+        local marker = (selected and "▸ " or "  ") .. (marked and "[x] " or "[ ] ")
         local content = marker .. (task and task.title or "")
         line[#line + 1] = styled("│", border_color(i), nil, i == state.focused_column)
         line[#line + 1] = styled(fit(content, width - 2), selected and COLUMN_COLORS[i] or foreground, nil, selected or false)
@@ -200,10 +202,8 @@ local function board_lines(state)
   end
   for _ = 1, gap do blank() end
   local message, color, bold = "NORMAL", foreground, false
-  if state.pending_delete_id then
-    local task
-    for _, item in ipairs(state.tasks) do if item.id == state.pending_delete_id then task = item; break end end
-    message = 'Delete "' .. (task and task.title or "task") .. '"?  y/N'
+  if state.pending_delete_ids then
+    message = "Delete " .. #state.pending_delete_ids .. " task(s)?  y/N"
     color, bold = (maki.ui.theme_style("error") or {}).fg, true
   elseif not state.valid or state.error_message then
     message = "Error: " .. tostring(state.error_message or state.error or "unknown error")
@@ -225,7 +225,7 @@ local function board_lines(state)
     end
   end
   for _ = 1, vertical do blank() end
-  if state.help_open and not state.pending_delete_id then Board.help_overlay(state, lines, HELP) end
+  if state.help_open and not state.pending_delete_ids then Board.help_overlay(state, lines, HELP) end
   return lines
 end
 
@@ -238,7 +238,7 @@ function Board.new(width, height)
   local self = setmetatable({}, Board)
   self._state = {
     width = math.max(1, width), height = math.max(1, height), focused_column = 1,
-    offsets = { 0, 0, 0 }, selected = { 1, 1, 1 },
+    offsets = { 0, 0, 0 }, selected = { 1, 1, 1 }, marked = {},
     valid = true, tasks = {}, cards = { todo = {}, doing = {}, done = {} },
   }
   refresh_lines(self._state)
@@ -247,7 +247,7 @@ end
 
 function Board:reload(store)
   local state = self._state
-  state.error_message, state.pending_delete_id = nil, nil
+  state.error_message, state.pending_delete_ids = nil, nil
   local selected_ids = {}
   for i, column in ipairs(COLUMNS) do
     local task = state.cards[column.status][state.selected[i]]
@@ -259,6 +259,9 @@ function Board:reload(store)
     state.cards = { todo = {}, doing = {}, done = {} }
   else
     state.valid, state.error, state.tasks = true, nil, tasks
+    local existing = {}
+    for _, task in ipairs(tasks) do existing[task.id] = true end
+    for id in pairs(state.marked) do if not existing[id] then state.marked[id] = nil end end
     state.cards = make_cards(tasks)
     for i, column in ipairs(COLUMNS) do
       for index, task in ipairs(state.cards[column.status]) do
@@ -281,11 +284,11 @@ end
 
 function Board:handle_key(key, store)
   local state = self._state
-  if state.pending_delete_id then
-    local id = state.pending_delete_id
-    state.pending_delete_id = nil
+  if state.pending_delete_ids then
+    local ids = state.pending_delete_ids
+    state.pending_delete_ids = nil
     if key == "y" then
-      local deleted, err = store:delete_many({ id })
+      local deleted, err = store:delete_many(ids)
       if deleted then
         self:reload(store)
       else
@@ -302,6 +305,11 @@ function Board:handle_key(key, store)
   end
   if key == "?" then
     state.help_open = true
+  elseif key == " " then
+    local task = state.valid and self:selected_task()
+    if task then
+      if state.marked[task.id] then state.marked[task.id] = nil else state.marked[task.id] = true end
+    end
   elseif key == "g" or key == "G" then
     local i = state.focused_column
     state.selected[i] = key == "g" and 1 or math.max(1, #state.cards[COLUMNS[i].status])
@@ -311,14 +319,32 @@ function Board:handle_key(key, store)
     state.focused_column = (state.focused_column - 2) % #COLUMNS + 1
   elseif key == "<" or key == ">" then
     local task = self:selected_task()
-    local target = state.focused_column + (key == "<" and -1 or 1)
-    if not task or not COLUMNS[target] then return true end
-    local updated, err = store:update_many({ [task.id] = { status = COLUMNS[target].status } })
+    local direction = key == "<" and -1 or 1
+    local updates = {}
+    if next(state.marked) then
+      for _, item in ipairs(state.tasks) do
+        if state.marked[item.id] then
+          local column = item.status == "todo" and 1 or item.status == "doing" and 2 or 3
+          if not COLUMNS[column + direction] then
+            state.error_message = "cannot move all marked tasks: status boundary reached"
+            refresh_lines(state)
+            return true
+          end
+          updates[item.id] = { status = COLUMNS[column + direction].status }
+        end
+      end
+    elseif task then
+      local target = state.focused_column + direction
+      if not COLUMNS[target] then return true end
+      updates[task.id] = { status = COLUMNS[target].status }
+    end
+    if not next(updates) then return true end
+    local updated, err = store:update_many(updates)
     if not updated then
       state.error_message = tostring(err or "could not move task")
     else
       self:reload(store)
-      self:select_task(task.id)
+      if task then self:select_task(task.id) end
     end
   elseif key == "j" or key == "<Down>" or key == "k" or key == "<Up>" then
     local i = state.focused_column
@@ -327,8 +353,14 @@ function Board:handle_key(key, store)
     clamp_state(state)
   elseif key == "d" then
     local task = state.valid and self:selected_task()
-    if not task then return true end
-    state.pending_delete_id = task.id
+    if not state.valid or (not task and not next(state.marked)) then return true end
+    local ids = {}
+    if next(state.marked) then
+      for _, item in ipairs(state.tasks) do if state.marked[item.id] then ids[#ids + 1] = item.id end end
+    else
+      ids[1] = task.id
+    end
+    state.pending_delete_ids = ids
   elseif key == "r" then
     self:reload(store)
     return true

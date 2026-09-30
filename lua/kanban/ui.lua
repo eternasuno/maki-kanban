@@ -47,14 +47,21 @@ function M.open()
         end
       elseif ev.type == "key" then
         if state.view == "board" then
-          if state.board._state.pending_delete_id or state.board._state.help_open then
+          if state.board._state.pending_delete_ids or state.board._state.help_open then
             if state.board:handle_key(ev.key, store) == "quit" then return end
             buf:set_lines(state.board:render())
           elseif ev.key == "q" or ev.key == "<Esc>" or ev.key == "<C-c>" then
             return
-          elseif ev.key == "a" and state.board:selected_task() then
-            local task = state.board:selected_task()
-            local reference = "[task:" .. task.id .. "] " .. task.title
+          elseif ev.key == "a" and (state.board:selected_task() or next(state.board._state.marked)) then
+            local tasks = {}
+            if next(state.board._state.marked) then
+              for _, task in ipairs(state.board._state.tasks) do if state.board._state.marked[task.id] then tasks[#tasks + 1] = task end end
+            else
+              tasks[1] = state.board:selected_task()
+            end
+            local references = {}
+            for _, task in ipairs(tasks) do references[#references + 1] = "[task:" .. task.id .. "] " .. task.title end
+            local reference = table.concat(references, "\n")
             win:close()
             open_win = nil
             local input, input_err = maki.ui.input()
