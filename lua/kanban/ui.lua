@@ -46,9 +46,10 @@ function M.open()
           buf:set_lines(state.task:render())
         end
       elseif ev.type == "key" then
-        if (ev.key == "q" or ev.key == "<Esc>") and not (state.view == "task" and (state.task.editing or state.task.creating or state.task.confirm_delete)) and not (state.view == "board" and state.board._state.pending_delete_id) then return end
+        if ev.key == "<C-c>" then return end
+        if (ev.key == "q" or ev.key == "<Esc>") and not (state.view == "task" and (state.task.editing or state.task.creating or state.task.confirm_delete)) and not (state.view == "board" and (state.board._state.pending_delete_id or state.board._state.help_open)) then return end
         if state.view == "board" then
-          if state.board._state.pending_delete_id then
+          if state.board._state.pending_delete_id or state.board._state.help_open then
             state.board:handle_key(ev.key, store)
             buf:set_lines(state.board:render())
           elseif ev.key == "n" then

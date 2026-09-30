@@ -50,98 +50,185 @@ local function pane_widths(width, focused)
   return widths, { 1, 2, 3 }
 end
 
+local function layout(state)
+  local horizontal, vertical = padding(state)
+  if state.height < 8 then vertical = 0 end
+  local available = state.height - 2 * vertical
+  local footer_height = math.min(3, available)
+  local gap = available >= 6 and 1 or 0
+  local column_height = available - footer_height - gap
+  return horizontal, vertical, column_height, math.max(0, column_height - 2), gap, footer_height
+end
+
 local function clamp_state(state)
-  local _, vertical = padding(state)
-  local viewport = math.max(0, state.height - 2 * vertical - 2)
+  local _, _, _, viewport = layout(state)
   for i, column in ipairs(COLUMNS) do
     local count = #state.cards[column.status]
     state.selected[i] = math.min(math.max(1, state.selected[i]), math.max(1, count))
     local max_offset = math.max(0, count - viewport)
     state.offsets[i] = math.min(math.max(0, state.offsets[i]), max_offset)
-    if state.selected[i] <= state.offsets[i] then
-      state.offsets[i] = state.selected[i] - 1
-    elseif state.selected[i] > state.offsets[i] + viewport then
-      state.offsets[i] = state.selected[i] - viewport
+    if viewport > 0 then
+      if state.selected[i] <= state.offsets[i] then
+        state.offsets[i] = state.selected[i] - 1
+      elseif state.selected[i] > state.offsets[i] + viewport then
+        state.offsets[i] = state.selected[i] - viewport
+      end
     end
     state.offsets[i] = math.min(math.max(0, state.offsets[i]), max_offset)
   end
 end
 
-local function board_lines(state)
-  clamp_state(state)
-  local horizontal, vertical = padding(state)
-  local pane_width = state.width - 2 * horizontal
-  local lines = {}
-  if pane_width < 3 or state.height - 2 * vertical < 2 then
-    for _ = 1, state.height do lines[#lines + 1] = string.rep(" ", state.width) end
-    return lines
-  end
-  local widths, visible = pane_widths(pane_width, state.focused_column)
-  local function add_line(spans)
-    if horizontal > 0 then
-      table.insert(spans, 1, styled(string.rep(" ", horizontal)))
-      spans[#spans + 1] = styled(string.rep(" ", horizontal))
-    end
-    lines[#lines + 1] = spans
-  end
-  for _ = 1, vertical do lines[#lines + 1] = string.rep(" ", state.width) end
-  local header = {}
-  for position, i in ipairs(visible) do
-    local column = COLUMNS[i]
-    local color = COLUMN_COLORS[i]
-    local title = string.format("[%d] %s(%d)", i, column.title, #state.cards[column.status])
-    local heading = maki.ui.truncate_text(title, math.max(0, widths[position] - 3)).head
-    header[#header + 1] = styled("┌─" .. heading .. string.rep("─", math.max(0, widths[position] - 3 - maki.ui.display_width(heading))) .. "┐", color, nil, i == state.focused_column)
-    if position < #visible then header[#header + 1] = styled(" ") end
-  end
-  add_line(header)
-
-  for row = 1, math.max(0, state.height - 2 * vertical - 2) do
-    local line = {}
-    for position, i in ipairs(visible) do
-      local column = COLUMNS[i]
-      local color = COLUMN_COLORS[i]
-      local width = widths[position]
-      local task_index = state.offsets[i] + row
-      local task = state.cards[column.status][task_index]
-      local title = task and task.title or ""
-      line[#line + 1] = styled("│", color, nil, i == state.focused_column)
-      local selected = task and i == state.focused_column and task_index == state.selected[i]
-      if selected then
-        local selection = maki.ui.theme_style("item_selected") or {}
-        line[#line + 1] = styled(" " .. fit(title, math.max(0, width - 4)) .. " ", selection.fg or maki.ui.theme_color("background"), selection.bg or maki.ui.theme_color("accent"))
-      else
-        line[#line + 1] = styled(" " .. fit(title, math.max(0, width - 4)) .. " ", maki.ui.theme_color("foreground"))
+local function slice_line(line, start, length)
+  local result, position = {}, 0
+  if type(line) == "string" then line = { styled(line) } end
+  for _, span in ipairs(line) do
+    local text, style = span[1], span[2]
+    local width = maki.ui.display_width(text)
+    local left, right = math.max(start, position), math.min(start + length, position + width)
+    if right > left then
+      local prefix = maki.ui.truncate_text(text, left - position)
+      local leading = left - position - maki.ui.display_width(prefix.head)
+      local tail = prefix.tail
+      if leading > 0 then
+        local first = maki.ui.truncate_text(tail, 2)
+        tail = first.tail
       end
-      line[#line + 1] = styled("│", color, nil, i == state.focused_column)
-      if position < #visible then line[#line + 1] = styled(" ") end
+      local part = maki.ui.truncate_text(tail, math.max(0, right - left - leading)).head
+      result[#result + 1] = { fit(string.rep(" ", leading) .. part, right - left), style }
     end
-    add_line(line)
+    position = position + width
   end
-  local bottom = {}
-  for position, i in ipairs(visible) do
-    bottom[#bottom + 1] = styled("└" .. string.rep("─", math.max(0, widths[position] - 2)) .. "┘", COLUMN_COLORS[i], nil, i == state.focused_column)
-    if position < #visible then bottom[#bottom + 1] = styled(" ") end
-  end
-  add_line(bottom)
-  for _ = 1, vertical do lines[#lines + 1] = string.rep(" ", state.width) end
-  return lines
+  return result
 end
 
-local function error_lines(err, width, height)
-  local text = "Could not load kanban: " .. tostring(err or "unknown error")
-  local lines = { fit(text, width) }
-  while #lines < height do lines[#lines + 1] = string.rep(" ", width) end
+local HELP = {
+  "Navigation",
+  "  h / Left    previous column",
+  "  l / Right   next column",
+  "  j / Down    next task",
+  "  k / Up      previous task",
+  "  g / G       first / last task",
+  "",
+  "Actions",
+  "  Enter       open task",
+  "  < / >       move task",
+  "  n           create task",
+  "  d           delete task",
+  "  r           reload",
+  "  q / Esc     close kanban",
+  "",
+  "  ? / Esc     close help",
+}
+
+local function help_overlay(state, lines)
+  local width, height = math.min(36, state.width), math.min(#HELP + 2, state.height)
+  if width < 2 or height < 2 then
+    lines[math.floor((state.height + 1) / 2)] = { styled(fit("? Help: ? / Esc close", state.width), maki.ui.theme_color("accent")) }
+    return
+  end
+  local x, y = math.floor((state.width - width) / 2), math.floor((state.height - height) / 2)
+  local color = maki.ui.theme_color("foreground")
+  for row = 1, height do
+    local text
+    if row == 1 then
+      local title = maki.ui.truncate_text("─ Keybindings ", width - 2).head
+      text = "┌" .. title .. string.rep("─", width - 2 - maki.ui.display_width(title)) .. "┐"
+    elseif row == height then
+      text = "└" .. string.rep("─", width - 2) .. "┘"
+    else
+      text = "│" .. fit(HELP[row - 1] or "", width - 2) .. "│"
+    end
+    local line = slice_line(lines[y + row], 0, x)
+    line[#line + 1] = styled(text, row == 1 and maki.ui.theme_color("accent") or color)
+    for _, span in ipairs(slice_line(lines[y + row], x + width, state.width - x - width)) do line[#line + 1] = span end
+    lines[y + row] = line
+  end
+end
+
+local function board_lines(state)
+  local horizontal, vertical, column_height, viewport, gap, footer_height = layout(state)
+  local pane_width = state.width - 2 * horizontal
+  local lines = {}
+  local foreground = maki.ui.theme_color("foreground")
+  local function add_line(spans)
+    table.insert(spans, 1, styled(string.rep(" ", horizontal)))
+    spans[#spans + 1] = styled(string.rep(" ", horizontal))
+    lines[#lines + 1] = spans
+  end
+  local function blank() lines[#lines + 1] = string.rep(" ", state.width) end
+  local function border_color(i) return i == state.focused_column and COLUMN_COLORS[i] or foreground end
+  for _ = 1, vertical do blank() end
+  if pane_width >= 3 and column_height >= 2 then
+    local widths, visible = pane_widths(pane_width, state.focused_column)
+    local header = {}
+    for position, i in ipairs(visible) do
+      local column = COLUMNS[i]
+      local title = "─ " .. column.title .. " · " .. #state.cards[column.status] .. " "
+      local heading = maki.ui.truncate_text(title, widths[position] - 2).head
+      header[#header + 1] = styled("┌" .. heading .. string.rep("─", widths[position] - 2 - maki.ui.display_width(heading)) .. "┐", border_color(i), nil, i == state.focused_column)
+      if position < #visible then header[#header + 1] = styled(" ") end
+    end
+    add_line(header)
+    local marker_width = maki.ui.display_width("▸ ")
+    for row = 1, viewport do
+      local line = {}
+      for position, i in ipairs(visible) do
+        local width = widths[position]
+        local index = state.offsets[i] + row
+        local task = state.cards[COLUMNS[i].status][index]
+        local selected = task and i == state.focused_column and index == state.selected[i]
+        local marker = selected and "▸ " or string.rep(" ", marker_width)
+        local content = marker .. (task and task.title or "")
+        line[#line + 1] = styled("│", border_color(i), nil, i == state.focused_column)
+        line[#line + 1] = styled(fit(content, width - 2), selected and maki.ui.theme_color("accent") or foreground, nil, selected or false)
+        line[#line + 1] = styled("│", border_color(i), nil, i == state.focused_column)
+        if position < #visible then line[#line + 1] = styled(" ") end
+      end
+      add_line(line)
+    end
+    local bottom = {}
+    for position, i in ipairs(visible) do
+      bottom[#bottom + 1] = styled("└" .. string.rep("─", widths[position] - 2) .. "┘", border_color(i), nil, i == state.focused_column)
+      if position < #visible then bottom[#bottom + 1] = styled(" ") end
+    end
+    add_line(bottom)
+  else
+    for _ = 1, column_height do blank() end
+  end
+  for _ = 1, gap do blank() end
+  local message, color, bold = "NORMAL", foreground, false
+  if state.pending_delete_id then
+    local task
+    for _, item in ipairs(state.tasks) do if item.id == state.pending_delete_id then task = item; break end end
+    message = 'Delete "' .. (task and task.title or "task") .. '"?  y/N'
+    color, bold = maki.ui.theme_color("error"), true
+  elseif not state.valid or state.error_message then
+    message = "Error: " .. tostring(state.error_message or state.error or "unknown error")
+    color, bold = maki.ui.theme_color("error"), true
+  else
+    local hint = "? help   q quit"
+    local inner = math.max(0, pane_width - 4)
+    message = message .. string.rep(" ", math.max(1, inner - #message - #hint)) .. hint
+  end
+  for row = 1, footer_height do
+    if pane_width < 2 or footer_height == 1 then
+      add_line({ styled(fit(message, pane_width), color, nil, bold) })
+    elseif row == 1 then
+      add_line({ styled("┌" .. string.rep("─", pane_width - 2) .. "┐", foreground) })
+    elseif row == 3 then
+      add_line({ styled("└" .. string.rep("─", pane_width - 2) .. "┘", foreground) })
+    else
+      add_line({ styled("│", foreground), styled(fit(" " .. message, pane_width - 2), color, nil, bold), styled("│", foreground) })
+    end
+  end
+  for _ = 1, vertical do blank() end
+  if state.help_open and not state.pending_delete_id then help_overlay(state, lines) end
   return lines
 end
 
 local function refresh_lines(state)
-  state.lines = state.valid and board_lines(state) or error_lines(state.error, state.width, state.height)
-  if state.pending_delete_id then
-    state.lines[state.height] = { styled(fit("Delete this task? y/N", state.width), maki.ui.theme_color("warning")) }
-  elseif state.valid and state.error_message then
-    state.lines[state.height] = { styled(fit("error: " .. state.error_message, state.width), maki.ui.theme_color("error")) }
-  end
+  clamp_state(state)
+  state.lines = board_lines(state)
 end
 
 function Board.new(width, height)
@@ -205,16 +292,22 @@ function Board:handle_key(key, store)
     refresh_lines(state)
     return true
   end
-  local number = tonumber(key)
-  if number and number >= 1 and number <= #COLUMNS then
-    state.focused_column = number
+  if state.help_open then
+    if key == "?" or key == "<Esc>" then state.help_open = false; refresh_lines(state) end
+    return true
+  end
+  if key == "?" then
+    state.help_open = true
+  elseif key == "g" or key == "G" then
+    local i = state.focused_column
+    state.selected[i] = key == "g" and 1 or math.max(1, #state.cards[COLUMNS[i].status])
   elseif key == "l" or key == "<Right>" then
     state.focused_column = state.focused_column % #COLUMNS + 1
   elseif key == "h" or key == "<Left>" then
     state.focused_column = (state.focused_column - 2) % #COLUMNS + 1
-  elseif key == "H" or key == "L" then
+  elseif key == "<" or key == ">" then
     local task = self:selected_task()
-    local target = state.focused_column + (key == "H" and -1 or 1)
+    local target = state.focused_column + (key == "<" and -1 or 1)
     if not task or not COLUMNS[target] then return true end
     local updated, err = store:update(task.id, { status = COLUMNS[target].status })
     if not updated then

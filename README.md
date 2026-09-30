@@ -14,11 +14,30 @@ Restart Maki and approve the package and its `fs_read` / `fs_write` permissions.
 
 ## Usage
 
-`/kanban` opens the Kanban board with TODO, DOING and DONE columns. Use `h`/`l` or Left/Right (or `1`/`2`/`3`) to focus a column, and `j`/`k` or Up/Down to select a task. Press Enter to open Task Detail in the same window. Press uppercase `H` / `L` to move the selected task to the adjacent column (TODO → DOING → DONE), without wrapping at either edge. After a successful move, focus and selection follow the task by ID; a failure leaves the current selection in place and displays an error. Lowercase `h` / `l` still only change column focus.
+`/kanban` opens the Kanban board with three independent TODO, DOING and DONE column boxes. Each title and task count is embedded in the top border, such as `TODO · 3`. Only the focused column has a status-colored border (TODO: accent, DOING: warning, DONE: success). The selected task uses a `▸` marker rather than a background highlight; every task reserves the same marker width. Narrow windows show only the focused column.
+
+| Board key | Action |
+| --- | --- |
+| `h` / Left, `l` / Right | Previous / next column |
+| `j` / Down, `k` / Up | Next / previous task |
+| `g` / `G` | First / last task in the focused column |
+| Enter | Open Task Detail in the same window |
+| `<` / `>` | Move the selected task to the previous / next column |
+| `n` | Create a task |
+| `d` | Confirm task deletion |
+| `r` | Reload |
+| `?` | Open keybinding help |
+| `q` / Esc | Close kanban |
+
+Moves do not wrap at either edge. After a successful move, focus and selection follow the task by ID; failures preserve selection and display an error. Column navigation never moves tasks. The former `1`/`2`/`3` and uppercase `H`/`L` Board bindings are removed.
+
+`?` opens the keybinding help overlay. `?` or Esc closes it. While help is open, other keys are consumed without changing the Board. Help is centered and recomputes its size and position after resizing; narrow windows clip its contents safely.
+
+A separate three-line Footer box shows `NORMAL` and compact help/quit hints. It also displays errors and delete confirmation, using bold error-colored text. The task viewport excludes the Footer and its spacing, including after resizing. Extremely small windows clip the layout to the available cells.
 
 In Task Detail, Tab / Shift+Tab switches between Title, Status and Description; `j`/`k`, Up/Down, PageDown/PageUp and `g`/`G` scroll the description. Enter edits the focused field. Title is edited inline, and Status is switched with `h`/`l` or Left/Right; Enter saves either field and Esc cancels. Description opens a temporary file in `$EDITOR`: save the file and exit to save the change, or exit without saving to cancel (no change). `b` returns to the board with selection and scroll position intact; `q` or Esc closes the Kanban UI outside inline editing.
 
-In Task Detail outside field editing, press `d` to display `Delete this task? y/N`. Only `y` confirms; any other key (including `n` or Esc) cancels confirmation without performing that key's normal action. Successful deletion reloads and returns to the board; selection falls back to the same index in the original column, clamped to the last remaining task, or no task if the column is empty. Delete failures keep Task Detail open and display the error so you can retry or return with `b`. On the board, `d` shows the same confirmation without opening Task Detail. Only `y` deletes; all other keys (including `q`, Esc, `n`, Enter and navigation) cancel and are consumed. Success reloads the board with the same clamped-index fallback; failure preserves cards, focus and selection and displays an error for retry. Resizing retains confirmation.
+In Task Detail outside field editing, press `d` to display `Delete this task? y/N`. Only `y` confirms; any other key (including `n` or Esc) cancels confirmation without performing that key's normal action. Successful deletion reloads and returns to the board; selection falls back to the same index in the original column, clamped to the last remaining task, or no task if the column is empty. Delete failures keep Task Detail open and display the error so you can retry or return with `b`. On the board, `d` shows `Delete "title"? y/N` in the Footer without opening Task Detail; confirmation takes priority over normal hints, errors and help. Only `y` deletes; all other keys (including `q`, Esc, `n`, Enter and navigation) cancel and are consumed. Success reloads the board with the same clamped-index fallback; failure preserves cards, focus and selection and displays an error for retry. Resizing retains confirmation.
 
 The agent can use:
 
