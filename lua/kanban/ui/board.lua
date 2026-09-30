@@ -284,7 +284,7 @@ function Board:handle_key(key, store)
     local id = state.pending_delete_id
     state.pending_delete_id = nil
     if key == "y" then
-      local deleted, err = store:delete(id)
+      local deleted, err = store:delete_many({ id })
       if deleted then
         self:reload(store)
       else
@@ -312,7 +312,7 @@ function Board:handle_key(key, store)
     local task = self:selected_task()
     local target = state.focused_column + (key == "<" and -1 or 1)
     if not task or not COLUMNS[target] then return true end
-    local updated, err = store:update(task.id, { status = COLUMNS[target].status })
+    local updated, err = store:update_many({ [task.id] = { status = COLUMNS[target].status } })
     if not updated then
       state.error_message = tostring(err or "could not move task")
     else

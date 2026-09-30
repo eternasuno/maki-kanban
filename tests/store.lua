@@ -331,375 +331,231 @@ local function write_raw(path, text)
   f:close()
 end
 
+local function seed(s)
+  return assert(s:create_many({
+    { title = "A", description = "first" },
+    { title = "B" },
+    { title = "C" },
+  }))
+end
+
 local function test_missing()
   local path = fresh()
   local s = Store.new(path)
-
-  local board, err = s:load()
-  ok(board ~= nil, "missing load returns board: " .. tostring(err))
-  ok(type(board.tasks) == "table", "missing board has tasks table")
+  local board = assert(s:load())
   eq(next(board.tasks), nil, "missing board is empty")
-
-  local tasks = s:list()
-  ok(tasks ~= nil, "missing list returns table")
-  eq(#tasks, 0, "missing list is empty")
-
-  local task, gerr = s:get("task-1")
-  eq(task, nil, "missing get returns nil")
-  eq(gerr, "task not found: task-1", "missing get error")
+  eq(#s:list(), 0, "missing list is empty")
+  for _, method in ipairs({ "get_many", "update_many", "delete_many" }) do
+    local input = method == "update_many" and { ["task-1"] = { title = "A" } } or { "task-1" }
+    local result, err = s[method](s, input)
+    eq(result, nil, method .. " rejects missing task")
+    eq(err, "task not found: task-1", method .. " missing error")
+    eq(read_file(path), nil, method .. " does not create file")
+  end
+  ok(s:save(), "save preserves missing-store behavior")
+  eq(#s:list(), 0, "save creates empty board")
 end
 
-local function test_create_get_list()
+local function test_success()
   local path = fresh()
   local s = Store.new(path)
+  local created = seed(s)
+  eq(created["task-1"].id, "task-1", "create returns ID-keyed public task")
+  eq(created["task-1"].description, "first", "create description")
+  eq(created["task-2"].description, "", "default description")
+  eq(created["task-3"].status, "todo", "default status")
+  eq(s:create_many({ { title = "D", status = "todo" } })["task-4"].title, "D", "single create")
+  eq(s:get_many({ "task-1" })["task-1"].title, "A", "single get")
+  local got = assert(s:get_many({ "task-3", "task-1" }))
+  eq(got["task-3"].title, "C", "multi get")
+  eq(got["task-2"], nil, "get excludes unrequested task")
+  got["task-1"].title = "detached"
+  eq(s:get_many({ "task-1" })["task-1"].title, "A", "public result detached")
 
-  local a = s:create({ title = "A", description = "first" })
-  ok(a ~= nil, "create A succeeds")
-  eq(a.id, "task-1", "first id")
-  eq(a.title, "A", "first title")
-  eq(a.description, "first", "first description")
-  eq(a.status, "todo", "create defaults to todo")
+  local patches = {
+    ["task-1"] = { title = "A2" },
+    ["task-2"] = { description = "second" },
+    ["task-3"] = { status = "done" },
+  }
+  local updated = assert(s:update_many(patches))
+  eq(updated["task-1"].title, "A2", "multi update title")
+  eq(updated["task-1"].description, "first", "update preserves description")
+  eq(updated["task-2"].description, "second", "multi update description")
+  eq(updated["task-3"].status, "done", "multi update status")
+  eq(patches["task-1"].status, nil, "update does not mutate patches")
+  eq(s:update_many({ ["task-1"] = { status = "doing", description = "" } })["task-1"].status, "doing", "single update")
+  local list = Store.new(path):list()
+  eq(#list, 4, "list preserves all tasks")
+  eq(list[1].id, "task-1", "list sorted first")
+  eq(list[4].id, "task-4", "list sorted last")
+  eq(list[3].status, "done", "update persisted")
 
-  local b = s:create({ title = "B" })
-  eq(b.id, "task-2", "second id")
-  eq(b.description, "", "description defaults to empty")
-  eq(b.status, "todo", "second status todo")
-
-  local got = s:get("task-1")
-  eq(got.title, "A", "get returns created title")
-  eq(got.status, "todo", "get returns created status")
-
-  local list = s:list()
-  eq(#list, 2, "list has two tasks")
-  eq(list[1].id, "task-1", "list sorted first id")
-  eq(list[2].id, "task-2", "list sorted second id")
-
-  local raw = read_file(path)
-  ok(raw ~= nil and raw:find("task-1", 1, true) and raw:find("task-2", 1, true), "file persisted both tasks")
+  local deleted = assert(s:delete_many({ "task-1", "task-3" }))
+  eq(deleted["task-1"].status, "doing", "delete returns prior status")
+  eq(deleted["task-3"].title, "C", "multi delete result")
+  local fields = 0
+  for _ in pairs(deleted["task-1"]) do fields = fields + 1 end
+  eq(fields, 4, "delete public fields only")
+  eq(#Store.new(path):list(), 2, "multi delete persisted")
+  eq(s:create_many({ { title = "replacement" }, { title = "replacement2" } })["task-3"].title, "replacement2", "create fills holes without collisions")
+  eq(s:get_many({ "task-2" })["task-2"].description, "second", "collision preserves existing task")
+  ok(s:delete_many({ "task-1" }), "single delete")
+  ok(s:delete_many({ "task-2", "task-3", "task-4" }), "delete all remaining tasks")
+  eq(#s:list(), 0, "empty board persisted")
+  eq(s:create_many({ { title = "restart" } })["task-1"].id, "task-1", "empty board reuses first id")
 end
 
-local function test_update()
+local function test_rejected()
   local path = fresh()
   local s = Store.new(path)
-  s:create({ title = "A" })
-
-  local up = s:update("task-1", { title = "A2", status = "doing" })
-  ok(up ~= nil, "update succeeds")
-  eq(up.title, "A2", "update title")
-  eq(up.status, "doing", "update status")
-  eq(up.description, "", "update keeps description")
-
-  local reloaded = Store.new(path)
-  local got = reloaded:get("task-1")
-  eq(got.title, "A2", "update persisted title")
-  eq(got.status, "doing", "update persisted status")
-
-  local unchanged = s:update("task-1", {})
-  eq(unchanged, nil, "update with no fields returns nil")
-end
-
-local function test_invalid()
-  local path = fresh()
-  local s = Store.new(path)
-
-  local t, e = s:create({})
-  eq(t, nil, "create without title nil")
-  eq(e, "title must be a string", "create title type error")
-
-  t, e = s:create({ title = "   " })
-  eq(t, nil, "create blank title nil")
-  eq(e, "title must not be empty", "create blank title error")
-
-  t, e = s:create({ title = "x", description = 5 })
-  eq(t, nil, "create numeric description nil")
-  eq(e, "description must be a string", "create description error")
-
-  t, e = s:create({ title = "x", status = "doing" })
-  eq(t, nil, "create non-todo status nil")
-  eq(e, "invalid status: doing", "create status error")
-
-  t, e = s:create("nope")
-  eq(t, nil, "create non-table nil")
-  eq(e, "task must be an object", "create non-table error")
-
-  t, e = s:get(1)
-  eq(t, nil, "get non-string nil")
-  eq(e, "id must be a string", "get non-string error")
-
-  s:create({ title = "A" })
-
-  t, e = s:update("task-1", { status = "bogus" })
-  eq(t, nil, "update bad status nil")
-  eq(e, "invalid status: bogus", "update bad status error")
-
-  t, e = s:update("task-1", { title = "" })
-  eq(t, nil, "update blank title nil")
-  eq(e, "title must not be empty", "update blank title error")
-
-  t, e = s:update("task-1", "nope")
-  eq(t, nil, "update non-table nil")
-  eq(e, "update must be an object", "update non-table error")
-end
-
-local function test_unknown()
-  local path = fresh()
-  write_raw(path, '{"tasks":{"task-1":{"title":"A","description":"","status":"todo"}}}')
-  local s = Store.new(path)
-
-  local t, e = s:get("task-9")
-  eq(t, nil, "get unknown nil")
-  eq(e, "task not found: task-9", "get unknown error")
-
-  t, e = s:update("task-9", { title = "B" })
-  eq(t, nil, "update unknown nil")
-  eq(e, "task not found: task-9", "update unknown error")
+  seed(s)
+  local before = read_file(path)
+  local function reject(method, input, message)
+    local result, err = s[method](s, input)
+    eq(result, nil, message)
+    ok(type(err) == "string", message .. " has error")
+    eq(read_file(path), before, message .. " preserves bytes")
+  end
+  for _, method in ipairs({ "get_many", "create_many", "delete_many" }) do
+    for _, input in ipairs({ false, "nope", {}, { key = "task-1" }, { [2] = "task-1" }, { [1] = "task-1", [3] = "task-2" }, { "task-1", extra = true } }) do
+      reject(method, input, method .. " rejects non-array/empty/sparse/mixed input")
+    end
+    reject(method, nil, method .. " rejects nil")
+  end
+  for _, method in ipairs({ "get_many", "delete_many" }) do
+    for _, input in ipairs({ { 1 }, { false }, { {} }, { "task-1", "task-1" }, { "task-1", "task-9", "task-3" } }) do
+      reject(method, input, method .. " rejects invalid/duplicate/missing ID")
+    end
+  end
+  for _, input in ipairs({
+    {}, { title = "" }, { title = "  " }, { title = false },
+    { title = "X", description = 5 }, { title = "X", status = "doing" },
+    { title = "X", status = false }, "nope", { "X" },
+    { title = "X", [2] = true },
+  }) do
+    reject("create_many", { { title = "valid" }, input, { title = "also valid" } }, "invalid middle create rejects whole batch")
+  end
+  for _, input in ipairs({ false, "nope", {}, { { title = "X" } }, { [1] = { title = "X" }, ["task-1"] = { title = "X" } } }) do
+    reject("update_many", input, "update rejects non-object/empty/non-string key")
+  end
+  reject("update_many", nil, "update rejects nil")
+  for _, patch in ipairs({ {}, false, "nope", { "X" }, { title = "" }, { title = false }, { description = 1 }, { status = "bogus" }, { status = false }, { unknown = true }, { title = "valid", id = "task-2" } }) do
+    reject("update_many", { ["task-1"] = { title = "changed" }, ["task-2"] = patch, ["task-3"] = { status = "done" } }, "invalid patch rejects whole batch")
+  end
+  reject("update_many", { ["task-1"] = { title = "changed" }, ["task-9"] = { status = "done" } }, "missing update rejects whole batch")
+  eq(s:create_many({ { title = "next" } })["task-4"].id, "task-4", "rejected create consumes no IDs")
 end
 
 local function test_malformed()
   local path = fresh()
-
-  local broken = "{ this is not json"
-  write_raw(path, broken)
   local s = Store.new(path)
-
-  local board, e = s:load()
-  eq(board, nil, "malformed load nil")
-  ok(e and e:find("invalid kanban store"), "malformed load error: " .. tostring(e))
-
-  local got = s:get("task-1")
-  eq(got, nil, "get on malformed nil")
-  local listed = s:list()
-  eq(listed, nil, "list on malformed nil")
-
-  local t = s:create({ title = "A" })
-  eq(t, nil, "create on malformed nil")
-  eq(read_file(path), broken, "malformed file not overwritten by create")
-
-  local bad_schema = '{"tasks":{"task-1":{"title":"A"}}}'
-  write_raw(path, bad_schema)
-  board, e = s:load()
-  eq(board, nil, "bad schema load nil")
-  t = s:create({ title = "A" })
-  eq(t, nil, "create on bad schema nil")
-  eq(read_file(path), bad_schema, "bad schema file not overwritten")
-
-  local array = '{"tasks":[{"title":"A","description":"","status":"todo"}]}'
-  write_raw(path, array)
-  board, e = s:load()
-  eq(board, nil, "tasks array load nil")
-  ok(e and e:find("tasks must be an object"), "tasks array rejected: " .. tostring(e))
-  t = s:create({ title = "A" })
-  eq(t, nil, "create on tasks array nil")
-  eq(read_file(path), array, "tasks array file not overwritten")
-end
-
-local function test_collision_no_overwrite()
-  local path = fresh()
-  write_raw(path, '{"tasks":{"task-1":{"title":"old","description":"","status":"done"}}}')
-
-  local s = Store.new(path)
-  local t = s:create({ title = "new" })
-  eq(t.id, "task-2", "create avoids existing id")
-
-  local board = s:load()
-  eq(board.tasks["task-1"].title, "old", "existing task title preserved")
-  eq(board.tasks["task-1"].status, "done", "existing task status preserved")
-  eq(board.tasks["task-2"].title, "new", "new task written")
-
-  local stale = Store.new(path)
-  local existing = stale:list()
-  eq(#existing, 2, "stale instance reads current file")
-
-  local json = maki.json
-  local data = json.decode('{"tasks":{"task-1":{"title":"one","description":"","status":"todo"},"task-2":{"title":"two","description":"","status":"todo"}}}')
-  write_raw(path, json.encode(data))
-
-  local late = stale:create({ title = "late" })
-  eq(late.id, "task-3", "create loads current file before writing")
-
-  local final = Store.new(path):load()
-  eq(final.tasks["task-1"].title, "one", "external task-1 preserved")
-  eq(final.tasks["task-2"].title, "two", "external task-2 preserved")
-  eq(final.tasks["task-3"].title, "late", "late task added")
-end
-
-local function test_read_reload()
-  local path = fresh()
-  local s = Store.new(path)
-  s:create({ title = "A" })
-
-  local before = s:get("task-1")
-  eq(before.title, "A", "initial title")
-
-  write_raw(path, '{"tasks":{"task-1":{"title":"edited","description":"","status":"doing"}}}')
-
-  local after = s:get("task-1")
-  eq(after.title, "edited", "get reloads current file")
-  eq(after.status, "doing", "get returns persisted status")
-
-  local list = s:list()
-  eq(list[1].title, "edited", "list reloads current file")
-end
-
-local function test_delete()
-  local path = fresh()
-  local s = Store.new(path)
-  s:create({ title = "A" })
-  s:create({ title = "B" })
-  s:create({ title = "C" })
-  s:list()
-  write_raw(path, '{"tasks":{"task-1":{"title":"A","description":"first","status":"done"},"task-2":{"title":"edited","description":"second","status":"doing"},"task-3":{"title":"C","description":"third","status":"todo"}}}')
-
-  local deleted, err = s:delete("task-2")
-  ok(deleted ~= nil, "delete succeeds: " .. tostring(err))
-  eq(deleted.id, "task-2", "delete returns id")
-  eq(deleted.title, "edited", "delete reloads current title")
-  eq(deleted.description, "second", "delete returns description")
-  eq(deleted.status, "doing", "delete returns status")
-  local fields = 0
-  for _ in pairs(deleted) do fields = fields + 1 end
-  eq(fields, 4, "delete returns only public fields")
-
-  local reloaded = Store.new(path)
-  local tasks = reloaded:list()
-  eq(#tasks, 2, "delete persisted removal")
-  eq(tasks[1].id, "task-1", "delete preserves first task")
-  eq(tasks[1].title, "A", "delete preserves first title")
-  eq(tasks[1].description, "first", "delete preserves first description")
-  eq(tasks[1].status, "done", "delete preserves first status")
-  eq(tasks[2].id, "task-3", "delete preserves third task")
-  eq(tasks[2].title, "C", "delete preserves third title")
-  eq(tasks[2].description, "third", "delete preserves third description")
-  eq(tasks[2].status, "todo", "delete preserves third status")
-  local got, gerr = reloaded:get("task-2")
-  eq(got, nil, "deleted task cannot be read")
-  eq(gerr, "task not found: task-2", "deleted task get error")
-  eq(s:create({ title = "replacement" }).id, "task-2", "create reuses first unused id")
-
-  for _, task in ipairs(s:list()) do
-    ok(s:delete(task.id) ~= nil, "delete remaining task")
-  end
-  eq(#Store.new(path):list(), 0, "delete last task persists empty board")
-  eq(s:create({ title = "restart" }).id, "task-1", "empty board starts at first unused id")
-end
-
-local function test_delete_rejected()
-  local path = fresh()
-  local s = Store.new(path)
-  local task, err = s:delete("task-9")
-  eq(task, nil, "delete on missing store nil")
-  eq(err, "task not found: task-9", "delete on missing store error")
-  eq(read_file(path), nil, "delete on missing store does not create file")
-  s:create({ title = "A" })
-  local before = read_file(path)
-  for _, id in ipairs({ "task-9", "" }) do
-    task, err = s:delete(id)
-    eq(task, nil, "delete unknown nil")
-    eq(err, "task not found: " .. id, "delete unknown error")
-    eq(read_file(path), before, "delete unknown preserves bytes")
-  end
-  for _, id in ipairs({ 1, false, {} }) do
-    task, err = s:delete(id)
-    eq(task, nil, "delete invalid id nil")
-    eq(err, "id must be a string", "delete invalid id error")
-    eq(read_file(path), before, "delete invalid id preserves bytes")
-  end
-  task, err = s:delete(nil)
-  eq(task, nil, "delete missing id nil")
-  eq(err, "id must be a string", "delete missing id error")
-  eq(read_file(path), before, "delete missing id preserves bytes")
-
   for _, broken in ipairs({
     "{ this is not json",
     '{"tasks":{"task-1":{"title":"A"}}}',
     '{"tasks":[{"title":"A","status":"todo"}]}',
   }) do
     write_raw(path, broken)
-    task, err = s:delete("task-1")
-    eq(task, nil, "delete malformed store nil")
-    ok(err and err:find("invalid kanban store", 1, true), "delete malformed store error")
-    eq(read_file(path), broken, "delete malformed store preserves bytes")
+    for _, operation in ipairs({
+      { "load" }, { "save" }, { "list" },
+      { "get_many", { "task-1" } },
+      { "create_many", { { title = "A" }, { title = "B" } } },
+      { "update_many", { ["task-1"] = { title = "B" } } },
+      { "delete_many", { "task-1" } },
+    }) do
+      local result, err = s[operation[1]](s, operation[2])
+      eq(result, nil, operation[1] .. " rejects malformed store")
+      ok(err and err:find("invalid kanban store", 1, true), operation[1] .. " malformed error")
+      eq(read_file(path), broken, operation[1] .. " preserves malformed bytes")
+    end
   end
 end
 
-local function test_delete_persistence_failure()
+local function test_reload()
   local path = fresh()
   local s = Store.new(path)
-  s:create({ title = "A" })
-  s:create({ title = "B" })
+  seed(s)
+  write_raw(path, '{"tasks":{"task-1":{"title":"external","description":"details","status":"doing"}}}')
+  eq(s:get_many({ "task-1" })["task-1"].title, "external", "get reloads")
+  eq(s:list()[1].status, "doing", "list reloads")
+  eq(s:create_many({ { title = "new" }, { title = "new2" } })["task-3"].title, "new2", "create reads current IDs")
+  eq(s:update_many({ ["task-1"] = { title = "updated" } })["task-1"].description, "details", "update preserves external fields")
+  eq(s:delete_many({ "task-1" })["task-1"].status, "doing", "delete returns latest fields")
+  eq(#s:list(), 2, "external replacement not overwritten")
+end
+
+local function test_io_counts()
+  local path = fresh()
+  local s = Store.new(path)
+  seed(s)
+  local old_read, old_write = maki.fs.read, maki.fs.atomic_write
+  local reads, writes = 0, 0
+  maki.fs.read = function(...)
+    reads = reads + 1
+    return old_read(...)
+  end
+  maki.fs.atomic_write = function(...)
+    writes = writes + 1
+    return old_write(...)
+  end
+  local operations = {
+    { "get_many", { "task-1", "task-2" }, 0 },
+    { "create_many", { { title = "D" }, { title = "E" } }, 1 },
+    { "update_many", { ["task-1"] = { title = "A2" }, ["task-2"] = { status = "done" } }, 1 },
+    { "delete_many", { "task-4", "task-5" }, 1 },
+    { "update_many", { ["task-1"] = { title = "bad" }, ["task-2"] = {} }, 0 },
+    { "delete_many", { "task-1", "missing" }, 0 },
+    { "get_many", { "task-1", "missing" }, 0 },
+  }
+  for _, operation in ipairs(operations) do
+    reads, writes = 0, 0
+    local result = s[operation[1]](s, operation[2])
+    eq(reads, 1, operation[1] .. " reads once")
+    eq(writes, operation[3], operation[1] .. " atomic write count")
+    if operation[3] == 1 then ok(result, operation[1] .. " succeeds") end
+  end
+  reads, writes = 0, 0
+  eq(s:create_many({ { title = "valid" }, {} }), nil, "invalid create fails before allocation")
+  eq(writes, 0, "invalid create does not write")
+  ok(reads <= 1, "invalid create reads at most once")
+  maki.fs.read, maki.fs.atomic_write = old_read, old_write
+end
+
+local function test_persistence_failure()
+  local path = fresh()
+  local s = Store.new(path)
+  seed(s)
   local before = read_file(path)
-  local failures = {
+  for _, failure in ipairs({
     { maki.json, "encode", "could not encode store: injected failure" },
     { maki.fs, "mkdir", "could not create store directory: injected failure" },
     { maki.fs, "atomic_write", "could not write store: injected failure" },
-  }
-  for _, failure in ipairs(failures) do
-    local owner, key, expected = failure[1], failure[2], failure[3]
-    local original = owner[key]
-    owner[key] = function() return nil, "injected failure" end
-    local task, err = s:delete("task-1")
-    owner[key] = original
-    eq(task, nil, "delete persistence failure returns nil")
-    eq(err, expected, "delete propagates persistence failure")
-    eq(read_file(path), before, "delete persistence failure preserves bytes")
-    eq(s:get("task-1").title, "A", "failed delete preserves target")
-    eq(s:get("task-2").title, "B", "failed delete preserves other task")
+  }) do
+    for _, operation in ipairs({
+      { "create_many", { { title = "D" }, { title = "E" } } },
+      { "update_many", { ["task-1"] = { title = "changed" }, ["task-2"] = { status = "done" } } },
+      { "delete_many", { "task-1", "task-2" } },
+    }) do
+      local owner, key = failure[1], failure[2]
+      local original = owner[key]
+      owner[key] = function() return nil, "injected failure" end
+      local result, err = s[operation[1]](s, operation[2])
+      owner[key] = original
+      eq(result, nil, operation[1] .. " persistence failure")
+      eq(err, failure[3], "persistence error propagated")
+      eq(read_file(path), before, "persistence failure preserves bytes")
+    end
   end
-  ok(s:delete("task-1") ~= nil, "delete succeeds after persistence recovers")
-end
-
-local function test_delete_tool()
-  local registered = {}
-  local old_api, old_cwd = maki.api, maki.uv.cwd
-  maki.api = { register_tool = function(spec) registered[spec.name] = spec end }
-  local cwd = base .. "/tool-case"
-  maki.uv.cwd = function() return cwd end
-  require("kanban.tools").register()
-  maki.api, maki.uv.cwd = old_api, old_cwd
-
-  local tool = registered.task_delete
-  ok(tool ~= nil, "task_delete registered")
-  eq(tool.schema.type, "object", "task_delete object schema")
-  eq(tool.schema.properties.id.type, "string", "task_delete string id schema")
-  eq(tool.schema.required[1], "id", "task_delete requires id")
-  eq(#tool.schema.required, 1, "task_delete requires only id")
-  local properties = 0
-  for _ in pairs(tool.schema.properties) do properties = properties + 1 end
-  eq(properties, 1, "task_delete schema has only id")
-
-  local created = maki.json.decode(registered.task_create.handler({ title = "tool task", description = "details" }).llm_output)
-  local result = tool.handler({ id = created.id })
-  eq(result.is_error, nil, "task_delete success not an error")
-  local deleted = maki.json.decode(result.llm_output)
-  eq(deleted.id, created.id, "task_delete JSON id")
-  eq(deleted.title, "tool task", "task_delete JSON title")
-  eq(deleted.description, "details", "task_delete JSON description")
-  eq(deleted.status, "todo", "task_delete JSON status")
-  eq(#Store.new(cwd .. "/.maki/kanban.json"):list(), 0, "task_delete handler persists removal")
-  result = tool.handler({ id = created.id })
-  eq(result.is_error, true, "task_delete unknown is error")
-  eq(result.llm_output, "error: task not found: " .. created.id, "task_delete unknown error convention")
-  result = tool.handler({})
-  eq(result.is_error, true, "task_delete missing id is error")
-  eq(result.llm_output, "error: id must be a string", "task_delete missing id error convention")
-  result = tool.handler({ id = 1 })
-  eq(result.is_error, true, "task_delete invalid id is error")
-  eq(result.llm_output, "error: id must be a string", "task_delete invalid id error convention")
+  ok(s:delete_many({ "task-1", "task-2" }), "write recovers")
 end
 
 local tests = {
   test_missing,
-  test_create_get_list,
-  test_update,
-  test_invalid,
-  test_unknown,
+  test_success,
+  test_rejected,
   test_malformed,
-  test_collision_no_overwrite,
-  test_read_reload,
-  test_delete,
-  test_delete_rejected,
-  test_delete_persistence_failure,
-  test_delete_tool,
+  test_reload,
+  test_io_counts,
+  test_persistence_failure,
 }
 
 for _, test in ipairs(tests) do

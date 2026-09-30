@@ -145,13 +145,13 @@ function Task:_save(store, field, value)
     return true
   end
   local updated, err
-  if store then updated, err = store:update(self.task.id, { [field] = value }) else err = "store unavailable" end
+  if store then updated, err = store:update_many({ [self.task.id] = { [field] = value } }) else err = "store unavailable" end
   if not updated then
     self.error = tostring(err or "could not update task")
     self:resize(self.width, self.height)
     return true
   end
-  self.task = updated
+  self.task = updated[self.task.id]
   self:_finish_edit()
   return "changed"
 end
@@ -190,7 +190,9 @@ function Task:_edit_description(store)
         self.task.description = text
         updated = self.task
       elseif store then
-        updated, update_err = store:update(self.task.id, { description = text })
+        local results
+        results, update_err = store:update_many({ [self.task.id] = { description = text } })
+        updated = results and results[self.task.id]
       else
         update_err = "store unavailable"
       end
@@ -296,7 +298,7 @@ function Task:handle_key(key, store)
     self.confirm_delete = false
     if key ~= "y" then return true end
     local deleted, err
-    if store then deleted, err = store:delete(self.task.id) else err = "store unavailable" end
+    if store then deleted, err = store:delete_many({ self.task.id }) else err = "store unavailable" end
     if not deleted then self.error = tostring(err or "could not delete task"); return true end
     return "deleted"
   end
@@ -331,9 +333,10 @@ function Task:handle_key(key, store)
     return self:_begin(store)
   elseif self.creating and key == "s" then
     local created, err
-    if store then created, err = store:create({ title = self.task.title, description = self.task.description }) else err = "store unavailable" end
+    if store then created, err = store:create_many({ { title = self.task.title, description = self.task.description } }) else err = "store unavailable" end
     if not created then self.error = tostring(err or "could not create task"); return true end
-    self.task, self.creating, self.error = created, false, nil
+    local _, task = next(created)
+    self.task, self.creating, self.error = task, false, nil
     self.focused_field, self.offset = "title", 0
     self:resize(self.width, self.height)
     return "created"

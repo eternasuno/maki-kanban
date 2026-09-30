@@ -32,7 +32,7 @@ local function task_list()
 end
 
 local function task_get(input)
-  local task, err = store:get(input.id)
+  local task, err = store:get_many(input.ids)
   if not task then
     return failure(err)
   end
@@ -40,7 +40,7 @@ local function task_get(input)
 end
 
 local function task_create(input)
-  local task, err = store:create(input)
+  local task, err = store:create_many(input.tasks)
   if not task then
     return failure(err)
   end
@@ -48,7 +48,7 @@ local function task_create(input)
 end
 
 local function task_update(input)
-  local task, err = store:update(input.id, input)
+  local task, err = store:update_many(input.tasks)
   if not task then
     return failure(err)
   end
@@ -56,7 +56,7 @@ local function task_update(input)
 end
 
 local function task_delete(input)
-  local task, err = store:delete(input.id)
+  local task, err = store:delete_many(input.ids)
   if not task then
     return failure(err)
   end
@@ -78,38 +78,70 @@ function M.register()
 
   maki.api.register_tool({
     name = "task_get",
-    description = "Read one kanban task by id. Read-only. Returns the task as JSON.",
-    schema = { type = "object", properties = { id = ID }, required = { "id" } },
+    description = "Read kanban tasks by ids. Read-only, all-or-nothing. "
+      .. "Use a one-item array for a single task. Returns an ID-keyed JSON object.",
+    schema = {
+      type = "object",
+      properties = { ids = { type = "array", items = ID, minItems = 1 } },
+      required = { "ids" },
+    },
     handler = task_get,
   })
 
   maki.api.register_tool({
     name = "task_create",
-    description = "Create a kanban task in the todo column. Returns the created task as JSON.",
+    description = "Create kanban tasks in the todo column. Use a one-item array for a single task. "
+      .. "All-or-nothing: validates the whole batch before one atomic write. Returns an ID-keyed JSON object.",
     schema = {
       type = "object",
-      properties = { title = TITLE, description = DESCRIPTION },
-      required = { "title" },
+      properties = {
+        tasks = {
+          type = "array",
+          minItems = 1,
+          items = {
+            type = "object",
+            properties = { title = TITLE, description = DESCRIPTION },
+            required = { "title" },
+          },
+        },
+      },
+      required = { "tasks" },
     },
     handler = task_create,
   })
 
   maki.api.register_tool({
     name = "task_update",
-    description = "Update a kanban task by id. Only the fields you pass are changed. "
-      .. "Returns the updated task as JSON.",
+    description = "Update kanban tasks using an ID-keyed object of non-empty patches. "
+      .. "Only the fields you pass are changed. Use one entry for a single task. "
+      .. "All-or-nothing: validates the whole batch before one atomic write. Returns an ID-keyed JSON object.",
     schema = {
       type = "object",
-      properties = { id = ID, title = TITLE, description = DESCRIPTION, status = STATUS },
-      required = { "id" },
+      properties = {
+        tasks = {
+          type = "object",
+          minProperties = 1,
+          additionalProperties = {
+            type = "object",
+            properties = { title = TITLE, description = DESCRIPTION, status = STATUS },
+            minProperties = 1,
+          },
+        },
+      },
+      required = { "tasks" },
     },
     handler = task_update,
   })
 
   maki.api.register_tool({
     name = "task_delete",
-    description = "Delete a kanban task by id. Returns the deleted task as JSON.",
-    schema = { type = "object", properties = { id = ID }, required = { "id" } },
+    description = "Delete kanban tasks by ids. Use a one-item array for a single task. "
+      .. "All-or-nothing: validates the whole batch before one atomic write. Returns deleted tasks as an ID-keyed JSON object.",
+    schema = {
+      type = "object",
+      properties = { ids = { type = "array", items = ID, minItems = 1 } },
+      required = { "ids" },
+    },
     handler = task_delete,
   })
 end

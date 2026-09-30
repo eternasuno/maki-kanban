@@ -168,19 +168,79 @@ function Store:save()
   return write_tasks(self.path, self.dir, tasks)
 end
 
-function Store:get(id)
-  if type(id) ~= "string" then
-    return nil, "id must be a string"
+local function check_array(value, name)
+  if type(value) ~= "table" then
+    return nil, name .. " must be a non-empty array"
   end
-  local tasks, err = read_tasks(self.path)
-  if not tasks then
+  local count = 0
+  for key in pairs(value) do
+    if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then
+      return nil, name .. " must be a non-empty array"
+    end
+    count = count + 1
+  end
+  if count == 0 then
+    return nil, name .. " must be a non-empty array"
+  end
+  for i = 1, count do
+    if rawget(value, i) == nil then
+      return nil, name .. " must be a non-empty array"
+    end
+  end
+  return true
+end
+
+local function check_object(value, name)
+  if type(value) ~= "table" then
+    return nil, name .. " must be an object"
+  end
+  for key in pairs(value) do
+    if type(key) ~= "string" then
+      return nil, name .. " must be an object with string keys"
+    end
+  end
+  return true
+end
+
+local function check_ids(ids)
+  local ok, err = check_array(ids, "ids")
+  if not ok then
     return nil, err
   end
-  local body = tasks[id]
-  if not body then
-    return nil, "task not found: " .. id
+  local seen = {}
+  for _, id in ipairs(ids) do
+    if type(id) ~= "string" then
+      return nil, "id must be a string"
+    end
+    if seen[id] then
+      return nil, "duplicate id: " .. id
+    end
+    seen[id] = true
   end
-  return public(id, body)
+  return true
+end
+
+local function select_tasks(tasks, ids)
+  local out = {}
+  for _, id in ipairs(ids) do
+    if not tasks[id] then
+      return nil, "task not found: " .. id
+    end
+    out[id] = public(id, tasks[id])
+  end
+  return out
+end
+
+function Store:get_many(ids)
+  local ok, err = check_ids(ids)
+  if not ok then
+    return nil, err
+  end
+  local tasks, rerr = read_tasks(self.path)
+  if not tasks then
+    return nil, rerr
+  end
+  return select_tasks(tasks, ids)
 end
 
 function Store:list()
@@ -200,138 +260,129 @@ function Store:list()
   return out
 end
 
-function Store:create(input)
-  if input == nil then
-    input = {}
-  end
-  if type(input) ~= "table" then
-    return nil, "task must be an object"
-  end
-
-  local ok, terr = check_title(input.title)
+function Store:create_many(inputs)
+  local ok, err = check_array(inputs, "tasks")
   if not ok then
-    return nil, terr
-  end
-
-  local description = input.description
-  if description == nil then
-    description = ""
-  end
-  if type(description) ~= "string" then
-    return nil, "description must be a string"
-  end
-
-  if input.status ~= nil and input.status ~= "todo" then
-    return nil, "invalid status: " .. tostring(input.status)
-  end
-
-  local data, err = self:load()
-  if not data then
     return nil, err
   end
-
-  local id = next_id(data.tasks)
-  local body = {
-    title = input.title,
-    description = description,
-    status = "todo",
-  }
-  data.tasks[id] = body
-
-  local wok, werr = write_tasks(self.path, self.dir, data.tasks)
-  if not wok then
-    return nil, werr
-  end
-  return public(id, body)
-end
-
-function Store:update(id, input)
-  if type(id) ~= "string" then
-    return nil, "id must be a string"
-  end
-  if input == nil then
-    input = {}
-  end
-  if type(input) ~= "table" then
-    return nil, "update must be an object"
-  end
-
-  local data, err = self:load()
-  if not data then
-    return nil, err
-  end
-
-  local body = data.tasks[id]
-  if not body then
-    return nil, "task not found: " .. id
-  end
-
-  local updated = {
-    title = body.title,
-    description = body.description,
-    status = body.status,
-  }
-  local changed = false
-
-  if input.title ~= nil then
-    local ok, terr = check_title(input.title)
-    if not ok then
-      return nil, terr
+  local bodies = {}
+  for i, input in ipairs(inputs) do
+    local object_ok, object_err = check_object(input, "task")
+    if not object_ok then
+      return nil, object_err
     end
-    updated.title = input.title
-    changed = true
-  end
-
-  if input.description ~= nil then
-    if type(input.description) ~= "string" then
+    local title_ok, title_err = check_title(input.title)
+    if not title_ok then
+      return nil, title_err
+    end
+    local description = input.description
+    if description == nil then
+      description = ""
+    end
+    if type(description) ~= "string" then
       return nil, "description must be a string"
     end
-    updated.description = input.description
-    changed = true
-  end
-
-  if input.status ~= nil then
-    if not is_status(input.status) then
+    if input.status ~= nil and input.status ~= "todo" then
       return nil, "invalid status: " .. tostring(input.status)
     end
-    updated.status = input.status
-    changed = true
+    bodies[i] = { title = input.title, description = description, status = "todo" }
   end
 
-  if not changed then
-    return nil, "no fields to update"
+  local tasks, rerr = read_tasks(self.path)
+  if not tasks then
+    return nil, rerr
   end
-
-  data.tasks[id] = updated
-
-  local wok, werr = write_tasks(self.path, self.dir, data.tasks)
+  local out = {}
+  for _, body in ipairs(bodies) do
+    local id = next_id(tasks)
+    tasks[id] = body
+    out[id] = public(id, body)
+  end
+  local wok, werr = write_tasks(self.path, self.dir, tasks)
   if not wok then
     return nil, werr
   end
-  return public(id, updated)
+  return out
 end
 
-function Store:delete(id)
-  if type(id) ~= "string" then
-    return nil, "id must be a string"
-  end
-
-  local data, err = self:load()
-  if not data then
+function Store:update_many(updates)
+  local ok, err = check_object(updates, "updates")
+  if not ok then
     return nil, err
   end
-
-  local body = data.tasks[id]
-  if not body then
-    return nil, "task not found: " .. id
+  if next(updates) == nil then
+    return nil, "updates must not be empty"
   end
-  data.tasks[id] = nil
+  local tasks, rerr = read_tasks(self.path)
+  if not tasks then
+    return nil, rerr
+  end
+  for id, patch in pairs(updates) do
+    if not tasks[id] then
+      return nil, "task not found: " .. id
+    end
+    local object_ok, object_err = check_object(patch, "update")
+    if not object_ok then
+      return nil, object_err
+    end
+    if next(patch) == nil then
+      return nil, "no fields to update"
+    end
+    for field in pairs(patch) do
+      if field ~= "title" and field ~= "description" and field ~= "status" then
+        return nil, "unknown update field: " .. field
+      end
+    end
+    if patch.title ~= nil then
+      local title_ok, title_err = check_title(patch.title)
+      if not title_ok then
+        return nil, title_err
+      end
+    end
+    if patch.description ~= nil and type(patch.description) ~= "string" then
+      return nil, "description must be a string"
+    end
+    if patch.status ~= nil and not is_status(patch.status) then
+      return nil, "invalid status: " .. tostring(patch.status)
+    end
+  end
 
-  local wok, werr = write_tasks(self.path, self.dir, data.tasks)
+  local out = {}
+  for id, patch in pairs(updates) do
+    local body = tasks[id]
+    for field, value in pairs(patch) do
+      body[field] = value
+    end
+    out[id] = public(id, body)
+  end
+  local wok, werr = write_tasks(self.path, self.dir, tasks)
   if not wok then
     return nil, werr
   end
-  return public(id, body)
+  return out
+end
+
+function Store:delete_many(ids)
+  local ok, err = check_ids(ids)
+  if not ok then
+    return nil, err
+  end
+  local tasks, rerr = read_tasks(self.path)
+  if not tasks then
+    return nil, rerr
+  end
+  local out, serr = select_tasks(tasks, ids)
+  if not out then
+    return nil, serr
+  end
+  for _, id in ipairs(ids) do
+    tasks[id] = nil
+  end
+  local wok, werr = write_tasks(self.path, self.dir, tasks)
+  if not wok then
+    return nil, werr
+  end
+  return out
 end
 
 return Store

@@ -88,13 +88,15 @@ On the board or in Detail, `d` asks for deletion confirmation. Only `y` confirms
 
 Detail and Create have an independent Footer box showing mode, hints, errors, or deletion confirmation. The description viewport excludes the Footer and its spacing and is recomputed on resize; small windows clip safely.
 
-The agent can use:
+The agent tools are batch-first; tool names are unchanged:
 
-- `task_list` — list every task, including its ID.
-- `task_get` — read a task by `id`.
-- `task_create` — create with required `title` and optional `description`; ID is generated, status defaults to `todo`.
-- `task_update` — pass `id` and at least one of `title`, `description`, or `status` at the top level. Any legal status is allowed directly.
-- `task_delete` — delete by required `id`; returns the deleted task as JSON.
+- `task_list({})` — list every task as a JSON array, including its ID.
+- `task_get({"ids":["task-1","task-2"]})` — read tasks by ID.
+- `task_create({"tasks":[{"title":"Implement login","description":"Add login UI"},{"title":"Add tests"}]})` — create tasks with required `title` and optional `description`; IDs are generated and status defaults to `todo`.
+- `task_update({"tasks":{"task-1":{"status":"doing"},"task-2":{"title":"Add login tests"}}})` — pass an ID-keyed object of patches. Each patch must contain at least one of `title`, `description`, or `status`; the Store rejects empty patches. Omitted fields remain unchanged and any legal status is allowed directly.
+- `task_delete({"ids":["task-1","task-2"]})` — delete tasks by ID and return their deleted values.
+
+Get, create, update, and delete return ID-keyed JSON objects. For a single task, use the same batch schema with a one-item array (`ids` or create `tasks`) or a one-entry update `tasks` object; there is no separate single-task argument form. Batches are all-or-nothing: any invalid item or missing requested ID fails the whole call. Mutations validate the whole batch before one atomic write, with no partial changes.
 
 ## Data
 
@@ -112,7 +114,7 @@ Each project uses `<project>/.maki/kanban.json`, relative to the Maki process wo
 }
 ```
 
-The stored `tasks` value is an ID-to-task object, not an array; the task body does not contain an ID. Tool responses include the ID.
+The stored `tasks` value is an ID-to-task object, not an array; the task body does not contain an ID. `task_list` responses include IDs in task bodies; the other tool responses use IDs as object keys.
 
 ## Statuses
 
@@ -139,11 +141,11 @@ Run the lightweight regression scripts with Neovim's embedded LuaJIT (`nvim --he
 Use a fresh temporary project such as `/tmp/maki-kanban-test`:
 
 1. With no `.maki/kanban.json`, run `maki prompt --tools --names`, open `/kanban` and confirm three empty columns and no error.
-2. Create a task through `task_create` (`title`: `实现登录页面`, `description`: `添加基础登录 UI`); confirm `task-1`, `todo`, and an ID-keyed JSON object with no body ID.
-3. `task_list` and `task_get({"id":"task-1"})` must include the ID.
-4. Update its `status` through `doing` and `done`; check the returned task, JSON, and `/kanban` column after each step.
-5. Change `title` and `description` with `task_update`; omitted fields must remain unchanged.
-6. Try `status: "blocked"`, then `task_get` and `task_update` with a missing ID; all must report errors without modifying the file.
+2. Create a task through `task_create({"tasks":[{"title":"实现登录页面","description":"添加基础登录 UI"}]})`; confirm `task-1`, `todo`, and an ID-keyed JSON object with no body ID.
+3. `task_list({})` must include the ID in the task body; `task_get({"ids":["task-1"]})` must return it as an object key.
+4. Call `task_update({"tasks":{"task-1":{"status":"doing"}}})`, then repeat with `done`; check the returned task, JSON, and `/kanban` column after each step.
+5. Call `task_update({"tasks":{"task-1":{"title":"Login page","description":"Login UI"}}})`; omitted fields must remain unchanged.
+6. Try `task_update({"tasks":{"task-1":{"status":"blocked"}}})`, `task_get({"ids":["task-1","missing-id"]})`, and `task_update({"tasks":{"task-1":{"status":"todo"},"missing-id":{"status":"doing"}}})`; all must report errors without modifying the file. Also reject `task_update({"tasks":{"task-1":{}}})`. Create a second task and check multi-item get/update and `task_delete({"ids":["task-1","task-2"]})`; returned objects must be keyed by ID.
 7. Replace the JSON with invalid text, call `task_list` and open `/kanban`; expect an explicit error and the original invalid bytes to remain.
 8. On `/kanban`, open Create with `n`, edit Title and Description with Enter, and create with `s`; confirm the new Task Detail opens. Return with Esc, reopen with Enter, and try `d` → `n`, `d` → Esc, then `d` → `y`. Check selection after deleting a middle task and the last task in a column. Create another task and use `>`, `>`, `<`, `<`; selection must follow it. Repeat in a narrow single-column window and resize while moving. Try deleting/moving with malformed JSON and verify its bytes remain unchanged.
 9. Temporarily change the window title in `lua/kanban/ui.lua`, execute `/reload`, open `/kanban` and confirm the new title. Restore the code and reload again.

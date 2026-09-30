@@ -138,25 +138,31 @@ end
 package.loaded["maki.text_input"] = text_input
 
 local fake = { result = nil, error = nil, update_error = nil, calls = 0, updates = {} }
-function fake:update(id, patch)
+function fake:update_many(updates)
+  local id, patch = next(updates)
+  assert(type(id) == "string" and type(patch) == "table" and next(updates, id) == nil, "UI update must send one ID-keyed patch")
   self.updates[#self.updates + 1] = { id = id, patch = patch }
   if self.update_error then return nil, self.update_error end
   if patch.title ~= nil and patch.title == "" then return nil, "title must not be empty" end
   local source = self.result.tasks[id] or {}
   for key, value in pairs(patch) do source[key] = value end
   self.result.tasks[id] = source
-  return { id = id, title = source.title, description = source.description, status = source.status }
+  return { [id] = { id = id, title = source.title, description = source.description, status = source.status } }
 end
-function fake:delete(id)
+function fake:delete_many(ids)
+  assert(#ids == 1 and type(ids[1]) == "string" and next(ids, 1) == nil, "UI delete must send one ID in an array")
+  local id = ids[1]
   self.deletes = (self.deletes or 0) + 1
   self.deleted_id = id
   if self.delete_error then return nil, self.delete_error end
   local task = self.result.tasks[id]
   if not task then return nil, "task not found: " .. id end
   self.result.tasks[id] = nil
-  return { id = id, title = task.title, description = task.description, status = task.status }
+  return { [id] = { id = id, title = task.title, description = task.description, status = task.status } }
 end
-function fake:create(input)
+function fake:create_many(inputs)
+  assert(#inputs == 1 and type(inputs[1]) == "table" and next(inputs, 1) == nil, "UI create must send one input in an array")
+  local input = inputs[1]
   self.creates = (self.creates or 0) + 1
   self.create_inputs = self.create_inputs or {}
   self.create_inputs[#self.create_inputs + 1] = { title = input.title, description = input.description }
@@ -166,7 +172,7 @@ function fake:create(input)
   while self.result.tasks["task-" .. number] do number = number + 1 end
   local id = "task-" .. number
   self.result.tasks[id] = { title = input.title, description = input.description, status = "todo" }
-  return { id = id, title = input.title, description = input.description, status = "todo" }
+  return { [id] = { id = id, title = input.title, description = input.description, status = "todo" } }
 end
 function fake:list()
   self.calls = self.calls + 1
