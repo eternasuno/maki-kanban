@@ -958,9 +958,28 @@ for _, line_number in ipairs({ 2, 3, 7 }) do
   local spans = phase_lines[line_number]
   check(spans[2][2].fg == "#7799ff" and spans[2][2].bold, "focused top side and bottom borders use accent bold")
 end
-check(phase_lines[2][4][2].fg == "#eeeeee" and not phase_lines[2][4][2].bold and phase_lines[3][6][2].fg == "#eeeeee" and not phase_lines[3][6][2].bold and phase_lines[7][4][2].fg == "#eeeeee" and not phase_lines[7][4][2].bold, "inactive top side and bottom borders use foreground without bold")
-phase:handle_key("l", fake)
-check(phase:render()[2][4][2].fg == "#ffaa00" and phase:render()[2][4][2].bold and phase:render()[2][2][2].fg == "#eeeeee" and not phase:render()[2][2][2].bold, "column navigation transfers focused border styling")
+check(phase_lines[2][4][2].fg == "#ffaa00" and not phase_lines[2][4][2].bold and phase_lines[3][6][2].fg == "#eeeeee" and not phase_lines[3][6][2].bold and phase_lines[7][4][2].fg == "#eeeeee" and not phase_lines[7][4][2].bold, "inactive headers use status color while side and bottom borders retain foreground without bold")
+local header_colors = { "#7799ff", "#ffaa00", "#00cc66" }
+local header_titles = { "TODO · 30", "DOING · 0", "DONE · 0" }
+for focused = 1, 3 do
+  local lines = phase:render()
+  for column, color in ipairs(header_colors) do
+    local span = lines[2][column * 2]
+    check(span[1]:find(header_titles[column], 1, true) and span[2].fg == color and span[2].bold == (column == focused) and not span[2].bg, "all headers retain status color and only focused header is bold: " .. focused .. "/" .. column)
+  end
+  if focused < 3 then phase:handle_key("l", fake) end
+end
+phase:handle_key("h", fake)
+phase:handle_key("h", fake)
+phase:resize(20, 12)
+for focused, color in ipairs(header_colors) do
+  local lines = phase:render()
+  check(lines[2][2][1]:find(header_titles[focused], 1, true) and lines[2][2][2].fg == color and lines[2][2][2].bold and not lines[2][2][2].bg, "narrow header uses focused status color: " .. focused)
+  for _, line in ipairs(lines) do check(width(text(line)) <= 20, "status-colored narrow board respects width") end
+  if focused < 3 then phase:handle_key("l", fake) end
+end
+phase:resize(90, 12)
+phase:handle_key("h", fake)
 phase:handle_key("h", fake)
 phase:handle_key("G", fake)
 check(phase:selected_task().id == "task-30" and phase._state.offsets[1] == 26 and row(phase:render(), 6):find("▸ Title task-30", 1, true), "G reaches last task and exact final viewport row")

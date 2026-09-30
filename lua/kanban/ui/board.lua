@@ -167,7 +167,7 @@ local function board_lines(state)
       local column = COLUMNS[i]
       local title = "─ " .. column.title .. " · " .. #state.cards[column.status] .. " "
       local heading = maki.ui.truncate_text(title, widths[position] - 2).head
-      header[#header + 1] = styled("┌" .. heading .. string.rep("─", widths[position] - 2 - maki.ui.display_width(heading)) .. "┐", border_color(i), nil, i == state.focused_column)
+      header[#header + 1] = styled("┌" .. heading .. string.rep("─", widths[position] - 2 - maki.ui.display_width(heading)) .. "┐", COLUMN_COLORS[i], nil, i == state.focused_column)
       if position < #visible then header[#header + 1] = styled(" ") end
     end
     add_line(header)
