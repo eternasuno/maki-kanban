@@ -182,10 +182,10 @@ local function board_lines(state)
         local task = state.cards[COLUMNS[i].status][index]
         local selected = task and i == state.focused_column and index == state.selected[i]
         local marked = task and state.marked[task.id]
-        local marker = (selected and "▸ " or "  ") .. (marked and "[x] " or "[ ] ")
+        local marker = selected and "▸ " or "  "
         local content = marker .. (task and task.title or "")
         line[#line + 1] = styled("│", border_color(i), nil, i == state.focused_column)
-        line[#line + 1] = styled(fit(content, width - 2), selected and COLUMN_COLORS[i] or foreground, nil, selected or false)
+        line[#line + 1] = styled(fit(content, width - 2), (selected or marked) and COLUMN_COLORS[i] or foreground, nil, selected or marked or false)
         line[#line + 1] = styled("│", border_color(i), nil, i == state.focused_column)
         if position < #visible then line[#line + 1] = styled(" ") end
       end
@@ -256,11 +256,13 @@ function Board:reload(store)
   local tasks, err = store:list()
   if not tasks then
     state.valid, state.error, state.tasks = false, err, {}
-    state.cards = { todo = {}, doing = {}, done = {} }
+    state.cards, state.marked = { todo = {}, doing = {}, done = {} }, {}
   else
     state.valid, state.error, state.tasks = true, nil, tasks
     local existing = {}
-    for _, task in ipairs(tasks) do existing[task.id] = true end
+    for _, task in ipairs(tasks) do
+      if task.status == COLUMNS[state.focused_column].status then existing[task.id] = true end
+    end
     for id in pairs(state.marked) do if not existing[id] then state.marked[id] = nil end end
     state.cards = make_cards(tasks)
     for i, column in ipairs(COLUMNS) do
@@ -305,7 +307,7 @@ function Board:handle_key(key, store)
   end
   if key == "?" then
     state.help_open = true
-  elseif key == " " then
+  elseif key == "<Space>" or key == " " then
     local task = state.valid and self:selected_task()
     if task then
       if state.marked[task.id] then state.marked[task.id] = nil else state.marked[task.id] = true end
@@ -314,37 +316,32 @@ function Board:handle_key(key, store)
     local i = state.focused_column
     state.selected[i] = key == "g" and 1 or math.max(1, #state.cards[COLUMNS[i].status])
   elseif key == "l" or key == "<Right>" then
+    state.marked = {}
     state.focused_column = state.focused_column % #COLUMNS + 1
   elseif key == "h" or key == "<Left>" then
+    state.marked = {}
     state.focused_column = (state.focused_column - 2) % #COLUMNS + 1
   elseif key == "<" or key == ">" then
+    local tasks = self:selected_tasks()
     local task = self:selected_task()
-    local direction = key == "<" and -1 or 1
+    local had_marks = next(state.marked) ~= nil
+    local target = state.focused_column + (key == "<" and -1 or 1)
+    if #tasks == 0 or not COLUMNS[target] then return true end
     local updates = {}
-    if next(state.marked) then
-      for _, item in ipairs(state.tasks) do
-        if state.marked[item.id] then
-          local column = item.status == "todo" and 1 or item.status == "doing" and 2 or 3
-          if not COLUMNS[column + direction] then
-            state.error_message = "cannot move all marked tasks: status boundary reached"
-            refresh_lines(state)
-            return true
-          end
-          updates[item.id] = { status = COLUMNS[column + direction].status }
-        end
-      end
-    elseif task then
-      local target = state.focused_column + direction
-      if not COLUMNS[target] then return true end
-      updates[task.id] = { status = COLUMNS[target].status }
-    end
-    if not next(updates) then return true end
+    for _, item in ipairs(tasks) do updates[item.id] = { status = COLUMNS[target].status } end
     local updated, err = store:update_many(updates)
     if not updated then
       state.error_message = tostring(err or "could not move task")
     else
       self:reload(store)
       if task then self:select_task(task.id) end
+      if had_marks and state.valid and state.focused_column == target then
+        local moved = {}
+        for _, item in ipairs(tasks) do moved[item.id] = true end
+        for _, item in ipairs(state.cards[COLUMNS[target].status]) do
+          if moved[item.id] then state.marked[item.id] = true end
+        end
+      end
     end
   elseif key == "j" or key == "<Down>" or key == "k" or key == "<Up>" then
     local i = state.focused_column
@@ -352,14 +349,10 @@ function Board:handle_key(key, store)
     state.selected[i] = math.max(1, math.min(count, state.selected[i] + ((key == "j" or key == "<Down>") and 1 or -1)))
     clamp_state(state)
   elseif key == "d" then
-    local task = state.valid and self:selected_task()
-    if not state.valid or (not task and not next(state.marked)) then return true end
+    local tasks = self:selected_tasks()
+    if #tasks == 0 then return true end
     local ids = {}
-    if next(state.marked) then
-      for _, item in ipairs(state.tasks) do if state.marked[item.id] then ids[#ids + 1] = item.id end end
-    else
-      ids[1] = task.id
-    end
+    for _, task in ipairs(tasks) do ids[#ids + 1] = task.id end
     state.pending_delete_ids = ids
   elseif key == "r" then
     self:reload(store)
@@ -376,6 +369,7 @@ function Board:select_task(id)
   for i, column in ipairs(COLUMNS) do
     for index, task in ipairs(state.cards[column.status]) do
       if task.id == id then
+        if i ~= state.focused_column then state.marked = {} end
         state.focused_column, state.selected[i] = i, index
         refresh_lines(state)
         return true
@@ -389,6 +383,18 @@ function Board:selected_task()
   local state = self._state
   local column = COLUMNS[state.focused_column]
   return state.cards[column.status][state.selected[state.focused_column]]
+end
+
+function Board:selected_tasks()
+  local state = self._state
+  local tasks = {}
+  if not state.valid then return tasks end
+  for index, task in ipairs(state.cards[COLUMNS[state.focused_column].status]) do
+    if index == state.selected[state.focused_column] or state.marked[task.id] then
+      tasks[#tasks + 1] = task
+    end
+  end
+  return tasks
 end
 
 return Board

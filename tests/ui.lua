@@ -267,7 +267,7 @@ end
 check(focused, "focused header style is distinct")
 local selected = false
 for _, span in ipairs(last_buf.lines[3]) do
-  if type(span) == "table" and type(span[2]) == "table" and span[2].fg == "#7799ff" and span[2].bold and not span[2].bg and (span[1]:find("▸ [ ] ", 1, true) or span[1]:find("▸ [x] ", 1, true)) then selected = true end
+  if type(span) == "table" and type(span[2]) == "table" and span[2].fg == "#7799ff" and span[2].bold and not span[2].bg and span[1]:find("▸ ", 1, true) then selected = true end
 end
 check(selected, "selected row has accent bold marker without background")
 local order = table.concat(all, "\n")
@@ -278,7 +278,7 @@ run({ { type = "key", key = "l" }, { type = "key", key = "l" }, { type = "key", 
 check(text(last_buf.lines[2]):find("TODO", 1, true) ~= nil, "h/l column navigation")
 local first_selected = false
 for _, span in ipairs(last_buf.lines[3]) do
-  if span[1]:find("Title task%-1") and span[2] and span[2].bold and (span[1]:find("▸ [ ] ", 1, true) or span[1]:find("▸ [x] ", 1, true)) then first_selected = true end
+  if span[1]:find("Title task%-1") and span[2] and span[2].bold and span[1]:find("▸ ", 1, true) then first_selected = true end
 end
 check(first_selected, "j moves selection and k restores it")
 
@@ -342,7 +342,7 @@ check(observed.detail:find("first line", 1, true) and observed.detail:find("┌"
 check(observed.j:find("▸ Description", 1, true) and observed.j:find("first line", 1, true) and observed.down == observed.detail, "j and Down wrap field focus without scrolling")
 check(observed.scroll ~= observed.down and observed.page_down ~= observed.scroll and observed.bottom ~= observed.page_down, "J, PageDown and G advance description viewport")
 check(observed.page_up ~= observed.bottom and observed.k ~= observed.page_up and observed.top == observed.detail, "PageUp, K and g navigate viewport independently of focus")
-check(observed.back:find("DOING · 1", 1, true) and observed.back:find("▸ [ ] A long detail title", 1, true), "Esc restores board focus and selected task")
+check(observed.back:find("DOING · 1", 1, true) and observed.back:find("▸ A long detail title", 1, true), "Esc restores board focus and selected task")
 
 fake.result = { tasks = { ["task-1"] = { title = "待辦標題 that is far too long", description = "", status = "done" } } }
 observed = {}
@@ -370,6 +370,139 @@ check(last_win.closed, "Esc closes from board view")
 local Task = require("kanban.ui.task")
 local Board = require("kanban.ui.board")
 local function row(lines, i) return text(lines[i]) end
+
+fake.result = board({ "task-1", "task-2", "task-3" })
+for _, key in ipairs({ "h", "l", "<Left>", "<Right>" }) do
+  local column_multi = Board.new(90, 27)
+  column_multi:reload(fake)
+  column_multi:handle_key("<Space>", fake)
+  column_multi:handle_key("j", fake)
+  column_multi:handle_key("<Space>", fake)
+  column_multi:handle_key(key, fake)
+  check(not next(column_multi._state.marked) and column_multi._state.focused_column ~= 1, "column navigation clears all multiselect marks: " .. key)
+end
+for _, status in ipairs({ { "todo", "#7799ff" }, { "doing", "#ffaa00" }, { "done", "#00cc66" } }) do
+  fake.result = board({ "task-1", "task-2" })
+  fake.result.tasks["task-1"].status = status[1]
+  fake.result.tasks["task-2"].status = status[1]
+  local colored_multi = Board.new(90, 27)
+  colored_multi:reload(fake)
+  colored_multi:select_task("task-1")
+  colored_multi:handle_key("<Space>", fake)
+  colored_multi:handle_key("j", fake)
+  local spans = colored_multi:render()
+  local content = (colored_multi._state.focused_column - 1) * 4 + 3
+  check(spans[3][content][2].fg == status[2] and spans[4][content][2].fg == status[2] and spans[3][content][2].bold and spans[4][content][2].bold, "marks and cursor share column color in " .. status[1])
+end
+fake.result = board({ "task-1", "task-2", "task-3" })
+local multi = Board.new(90, 27)
+multi:reload(fake)
+check(multi:handle_key("<Space>", fake) and multi._state.marked["task-1"], "canonical Space marks the focused task")
+check(multi:render()[3][3][2].fg == "#7799ff" and multi:render()[3][3][1]:find("▸", 1, true), "marked cursor task keeps column color and cursor marker")
+multi:handle_key("j", fake)
+multi:handle_key("<Space>", fake)
+multi:handle_key("j", fake)
+check(multi._state.marked["task-1"] and multi._state.marked["task-2"] and not multi._state.marked["task-3"], "navigation preserves multiple marks independently of cursor")
+for index = 1, 2 do
+  local span = multi:render()[index + 2][3]
+  check(span[2].fg == "#7799ff" and span[2].fg == multi:render()[5][3][2].fg and span[2].bold and not span[1]:find("▸", 1, true), "marked task shares cursor color after cursor moves")
+end
+for _, line in ipairs(multi:render()) do
+  check(not text(line):find("[ ]", 1, true) and not text(line):find("[x]", 1, true), "board rows and empty cells omit checkboxes")
+end
+multi:handle_key("k", fake)
+multi:handle_key("<Space>", fake)
+multi:handle_key("j", fake)
+check(not multi._state.marked["task-2"] and multi:render()[4][3][2].fg == "#eeeeee" and not multi:render()[4][3][2].bold, "Space unmarks task and restores plain style after navigation")
+multi:handle_key("g", fake)
+multi:handle_key(" ", fake)
+check(not next(multi._state.marked), "literal Space remains compatible and toggles marks off")
+multi:handle_key("<Space>", fake)
+multi:handle_key("j", fake)
+multi:handle_key("<Space>", fake)
+multi:handle_key("j", fake)
+multi:handle_key(">", fake)
+check(fake.result.tasks["task-1"].status == "doing" and fake.result.tasks["task-2"].status == "doing" and fake.result.tasks["task-3"].status == "doing", "batch move includes marks and cursor task")
+multi:handle_key("d", fake)
+check(#multi._state.pending_delete_ids == 3, "batch delete confirms the effective selection")
+multi:handle_key("y", fake)
+check(not fake.result.tasks["task-1"] and not fake.result.tasks["task-2"] and not fake.result.tasks["task-3"] and not next(multi._state.marked), "batch deletion removes effective selection and cleans marks")
+
+fake.result = board({ "task-1", "task-2", "task-3" })
+input_snapshot = { text = "", cursor = 0, version = 7, session_id = "session-1" }
+run({ { type = "key", key = "<Space>" }, { type = "key", key = "j" }, { type = "key", key = "<Space>" }, { type = "key", key = "j" }, { type = "key", key = "a" } })
+check(input_edit_opts.text == "[task:task-1] Title task-1\n[task:task-2] Title task-2\n[task:task-3] Title task-3", "references include marks and cursor task in board order")
+input_snapshot = nil
+fake.result = board({ "task-1", "task-2" })
+local effective = Board.new(90, 27)
+effective:reload(fake)
+check(#effective:selected_tasks() == 1, "unmarked cursor remains selected")
+effective:handle_key("<Space>", fake)
+check(#effective:selected_tasks() == 1, "marked cursor is naturally deduplicated")
+effective:handle_key("j", fake)
+local effective_tasks = effective:selected_tasks()
+check(#effective_tasks == 2 and effective_tasks[1].id == "task-1" and effective_tasks[2].id == "task-2", "effective selection is stable union of cursor and marks")
+local effective_updates, effective_lists = #fake.updates, fake.calls
+effective:handle_key("<", fake)
+check(#fake.updates == effective_updates and fake.calls == effective_lists and effective._state.focused_column == 1 and effective._state.marked["task-1"] and #effective:selected_tasks() == 2, "boundary move preserves effective selection without store calls")
+fake.update_error = "union move failed"
+effective:handle_key(">", fake)
+check(effective._state.focused_column == 1 and effective:selected_task().id == "task-2" and effective._state.marked["task-1"] and not effective._state.marked["task-2"] and #effective:selected_tasks() == 2 and fake.calls == effective_lists, "failed union move preserves focus and exact marks")
+fake.update_error = nil
+effective_updates = #fake.updates
+effective:handle_key(">", fake)
+check(#fake.updates == effective_updates + 1 and fake.result.tasks["task-1"].status == "doing" and fake.result.tasks["task-2"].status == "doing" and effective._state.focused_column == 2 and effective:selected_task().id == "task-2", "two-task reproduction moves both once and follows second cursor")
+check(effective._state.marked["task-1"] and effective._state.marked["task-2"], "successful batch move retains entire effective set as marks")
+effective:handle_key("<Space>", fake)
+check(not effective._state.marked["task-2"] and effective._state.marked["task-1"] and #effective:selected_tasks() == 2 and effective:selected_task().status == "doing", "Space after move toggles only target mark without cross-column selection")
+effective:handle_key(">", fake)
+check(effective._state.focused_column == 3 and #effective:selected_tasks() == 2 and fake.result.tasks["task-1"].status == "done", "repeated batch move keeps effective set")
+effective:handle_key("<Space>", fake)
+effective:handle_key("d", fake)
+local frozen_ids = effective._state.pending_delete_ids
+check(#frozen_ids == 2 and frozen_ids[1] == "task-1" and frozen_ids[2] == "task-2", "delete freezes union ids in board order")
+effective:handle_key("<Space>", fake)
+check(not effective._state.pending_delete_ids and effective._state.marked["task-1"] and not effective._state.marked["task-2"] and #effective:selected_tasks() == 2, "delete cancellation consumes Space and preserves selection")
+effective:handle_key("d", fake)
+frozen_ids = effective._state.pending_delete_ids
+fake.delete_error = "union delete failed"
+effective:handle_key("y", fake)
+check(fake.deleted_ids == frozen_ids and effective._state.focused_column == 3 and effective._state.marked["task-1"] and not effective._state.marked["task-2"] and #effective:selected_tasks() == 2, "failed delete uses frozen union and preserves focus and marks")
+fake.delete_error = nil
+effective:select_task("task-1")
+check(effective._state.marked["task-1"], "same-column select_task preserves marks")
+fake.result.tasks["task-1"].status = "todo"
+effective:reload(fake)
+check(not next(effective._state.marked) and #effective:selected_tasks() == 1 and effective:selected_tasks()[1].id == "task-2", "external status change reload removes cross-column marks")
+effective:handle_key("<Space>", fake)
+effective:select_task("task-1")
+check(not next(effective._state.marked) and effective._state.focused_column == 1, "cross-column select_task clears marks")
+effective:handle_key("<Space>", fake)
+fake.error = "union reload failed"
+effective:reload(fake)
+check(not next(effective._state.marked) and #effective:selected_tasks() == 0, "failed reload clears marks and invalid effective selection")
+fake.error = nil
+for _, reload_failure in ipairs({ true, false }) do
+  fake.result = board({ "task-1", "task-2" })
+  effective:reload(fake)
+  effective:select_task("task-1")
+  effective:handle_key("<Space>", fake)
+  effective:handle_key("j", fake)
+  local list = fake.list
+  fake.list = function(self)
+    if reload_failure then return nil, "post-move reload failed" end
+    self.result.tasks["task-2"].status = "todo"
+    return list(self)
+  end
+  effective:handle_key(">", fake)
+  fake.list = list
+  check(not next(effective._state.marked) and effective._state.focused_column == 1, "post-move failed or mismatched reload never restores target marks: " .. tostring(reload_failure))
+end
+fake.result = board({ "task-1", "task-2" })
+run({ { type = "key", key = "<Space>" }, { type = "key", key = "j" }, { type = "key", key = "<Enter>" },
+  function() check(snapshot():find("Title task-2", 1, true) and not snapshot():find("Title task-1", 1, true), "Enter opens only cursor detail despite marks") end,
+  { type = "key", key = "q" },
+})
 local detail = Task.new({ title = "Short", status = "todo", description = "one\ntwo" }, 16, 12)
 local detail_lines = detail:render()
 check(row(detail_lines, 2):find("▸ Short", 1, true) and row(detail_lines, 3) == "│" .. string.rep(" ", 14) .. "│", "single-line title reserves second row")
@@ -537,7 +670,7 @@ run({ { type = "key", key = "<CR>" }, { type = "key", key = ">" },
   { type = "key", key = "<Esc>" }, function() observed.board = snapshot() end,
   { type = "key", key = "q" },
 })
-check(observed.moved:find("─ Task", 1, true) and observed.moved:find("Moving", 1, true) and observed.board:find("▸ [ ] Moving", 1, true), "status change stays detail then back selects moved ID")
+check(observed.moved:find("─ Task", 1, true) and observed.moved:find("Moving", 1, true) and observed.board:find("▸ Moving", 1, true), "status change stays detail then back selects moved ID")
 check(fake.result.tasks["task-1"].status == "doing" and snapshot():find("DOING · 1", 1, true) and snapshot():find("TODO · 0", 1, true), "status save moves board card")
 
 fake.result = { tasks = { ["task-1"] = { title = "Description", description = "original", status = "todo" } } }
@@ -578,7 +711,7 @@ run({ { type = "key", key = "n" }, { type = "paste", text = "ignored" }, { type 
 })
 check(fake.creates == create_calls + 1 and fake.result.tasks["task-2"].title == "新" and fake.create_inputs[#fake.create_inputs].description == "", "n and s create title-only CJK task")
 check(observed.created:find("─ Task", 1, true) and not observed.created:find("CREATE", 1, true) and observed.moved:find("新", 1, true) and fake.result.tasks["task-2"].status == "doing", "creation becomes Detail and immediately allows >")
-check(observed.board:find("DOING · 1", 1, true) and observed.board:find("▸ [ ] 新", 1, true), "back from created detail selects new ID in moved column")
+check(observed.board:find("DOING · 1", 1, true) and observed.board:find("▸ 新", 1, true), "back from created detail selects new ID in moved column")
 
 fake.result = board({ "task-1", "task-2", "task-3" })
 by_id:reload(fake)
@@ -608,7 +741,7 @@ local function selected_title()
   for _, line in ipairs(last_buf.lines) do
     if type(line) == "table" then
       for _, span in ipairs(line) do
-        if type(span[2]) == "table" and span[2].bold and (span[1]:find("▸ [ ] ", 1, true) or span[1]:find("▸ [x] ", 1, true)) then return span[1] end
+        if type(span[2]) == "table" and span[2].bold and span[1]:find("▸ ", 1, true) then return span[1] end
       end
     end
   end
@@ -805,7 +938,7 @@ local function check_board_selection(lines, color)
     if type(line) == "table" then
       for i, span in ipairs(line) do
         local style = span[2]
-        if (span[1]:find("▸ [ ] ", 1, true) or span[1]:find("▸ [x] ", 1, true)) then
+        if span[1]:find("▸ ", 1, true) then
           selected_row = true
           check(style.fg == color and style.bold and not style.bg, "selected marker and title follow status color without background")
           for _, border in ipairs({ line[i - 1], line[i + 1] }) do
@@ -983,7 +1116,7 @@ local phase = Board.new(90, 12)
 phase:reload(fake)
 check(width("▸") == 1 and width("▸ 中文") == 6 and truncate("▸ 中文", 4).head == "▸ 中", "mock treats marker as one cell while preserving CJK widths")
 local phase_lines = phase:render()
-check(phase_lines[3][3][1]:find("▸ [ ] 中文", 1, true) and phase_lines[4][3][1]:find("  [ ] 中文", 1, true), "selected and unselected titles show independent cursor and mark indicators")
+check(phase_lines[3][3][1]:find("▸ 中文", 1, true) and phase_lines[4][3][1]:find("  中文", 1, true), "selected and unselected titles use a cursor without checkbox indicators")
 check(phase_lines[3][3][2].fg == "#7799ff" and phase_lines[3][3][2].bold and not phase_lines[3][3][2].bg and phase_lines[4][3][2].fg == "#eeeeee" and not phase_lines[4][3][2].bold and not phase_lines[4][3][2].bg, "marker title styling is accent bold without background only on selection")
 for _, line_number in ipairs({ 2, 3, 7 }) do
   local spans = phase_lines[line_number]
@@ -1013,7 +1146,7 @@ phase:resize(90, 12)
 phase:handle_key("h", fake)
 phase:handle_key("h", fake)
 phase:handle_key("G", fake)
-check(phase:selected_task().id == "task-30" and phase._state.offsets[1] == 26 and row(phase:render(), 6):find("▸ [ ] Title task-30", 1, true), "G reaches last task and exact final viewport row")
+check(phase:selected_task().id == "task-30" and phase._state.offsets[1] == 26 and row(phase:render(), 6):find("▸ Title task-30", 1, true), "G reaches last task and exact final viewport row")
 phase:handle_key("g", fake)
 check(phase:selected_task().id == "task-1" and phase._state.offsets[1] == 0, "g restores first task and offset")
 for _, key in ipairs({ "1", "2", "3", "H", "L" }) do
@@ -1030,7 +1163,7 @@ for _, height in ipairs({ 3, 4, 5, 6, 7, 8, 9, 12, 27 }) do
   if height >= 8 then
     check(row(lines, 1) == string.rep(" ", 90) and row(lines, height) == string.rep(" ", 90) and row(lines, height - 4) == string.rep(" ", 90) and row(lines, height - 5):find("└", 1, true), "vertical padding and footer gap define exact column boundary at height " .. height)
     if height > 8 then
-      check(phase._state.offsets[1] == 30 - (height - 8) and row(lines, height - 6):find("▸ [ ] Title task-30", 1, true), "column viewport is height minus eight at height " .. height)
+      check(phase._state.offsets[1] == 30 - (height - 8) and row(lines, height - 6):find("▸ Title task-30", 1, true), "column viewport is height minus eight at height " .. height)
     end
   end
   for _, line in ipairs(lines) do check(width(text(line)) == 90, "footer layout has exact display width") end
@@ -1081,7 +1214,7 @@ run({ { type = "key", key = "G" }, function() observed.last = selected_title() e
   { type = "key", key = "1" }, { type = "key", key = "2" }, { type = "key", key = "3" }, { type = "key", key = "H" }, { type = "key", key = "L" },
   function() observed.removed = snapshot() end, { type = "key", key = "q" },
 })
-check(observed.last:find("task-30", 1, true) and observed.first:find("▸ [ ] Title task-1", 1, true) and observed.removed == observed.first and fake.calls == regression_calls + 1 and #fake.updates == regression_updates, "event loop supports g/G and ignores removed shortcuts")
+check(observed.last:find("task-30", 1, true) and observed.first:find("▸ Title task-1", 1, true) and observed.removed == observed.first and fake.calls == regression_calls + 1 and #fake.updates == regression_updates, "event loop supports g/G and ignores removed shortcuts")
 for _, key in ipairs(help_keys) do
   fake.result = board(regression_ids)
   fake.result.tasks["task-1"].title = "中文 first"

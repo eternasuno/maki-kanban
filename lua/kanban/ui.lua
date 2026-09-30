@@ -52,33 +52,30 @@ function M.open()
             buf:set_lines(state.board:render())
           elseif ev.key == "q" or ev.key == "<Esc>" or ev.key == "<C-c>" then
             return
-          elseif ev.key == "a" and (state.board:selected_task() or next(state.board._state.marked)) then
-            local tasks = {}
-            if next(state.board._state.marked) then
-              for _, task in ipairs(state.board._state.tasks) do if state.board._state.marked[task.id] then tasks[#tasks + 1] = task end end
-            else
-              tasks[1] = state.board:selected_task()
-            end
-            local references = {}
-            for _, task in ipairs(tasks) do references[#references + 1] = "[task:" .. task.id .. "] " .. task.title end
-            local reference = table.concat(references, "\n")
-            win:close()
-            open_win = nil
-            local input, input_err = maki.ui.input()
-            if not input then
-              maki.notify("Could not reference task in Maki input: " .. tostring(input_err or "input unavailable"), "error", { title = "Kanban" })
+          elseif ev.key == "a" then
+            local tasks = state.board:selected_tasks()
+            if #tasks > 0 then
+              local references = {}
+              for _, task in ipairs(tasks) do references[#references + 1] = "[task:" .. task.id .. "] " .. task.title end
+              local reference = table.concat(references, "\n")
+              win:close()
+              open_win = nil
+              local input, input_err = maki.ui.input()
+              if not input then
+                maki.notify("Could not reference task in Maki input: " .. tostring(input_err or "input unavailable"), "error", { title = "Kanban" })
+                return
+              end
+              local separator = input.text ~= "" and not input.text:sub(1, input.cursor):match("\n$") and "\n" or ""
+              local inserted, edit_err = maki.ui.input_edit({
+                start = input.cursor, stop = input.cursor, text = separator .. reference,
+                cursor = input.cursor + #separator + #reference,
+                version = input.version, session_id = input.session_id,
+              })
+              if not inserted then
+                maki.notify("Could not reference task in Maki input: " .. tostring(edit_err or "input edit failed"), "error", { title = "Kanban" })
+              end
               return
             end
-            local separator = input.text ~= "" and not input.text:sub(1, input.cursor):match("\n$") and "\n" or ""
-            local inserted, edit_err = maki.ui.input_edit({
-              start = input.cursor, stop = input.cursor, text = separator .. reference,
-              cursor = input.cursor + #separator + #reference,
-              version = input.version, session_id = input.session_id,
-            })
-            if not inserted then
-              maki.notify("Could not reference task in Maki input: " .. tostring(edit_err or "input edit failed"), "error", { title = "Kanban" })
-            end
-            return
           elseif ev.key == "n" then
             state.task = Task.new_create(state.width, state.height)
             state.view = "task"
