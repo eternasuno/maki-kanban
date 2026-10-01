@@ -1,4 +1,34 @@
 --# selene: allow(undefined_variable, unscoped_variables)
+local Text = require("kanban.ui.text")
+local empty = Text.wrap("", 4)
+check(#empty == 1 and empty[1] == "", "text wrapping preserves an empty line")
+local paragraphs = Text.wrap("ab\n\n中\n", 2)
+check(
+  #paragraphs == 4 and paragraphs[1] == "ab" and paragraphs[2] == "" and paragraphs[3] == "中" and paragraphs[4] == "",
+  "text wrapping preserves Unicode, blank lines and trailing newline"
+)
+check(#Text.wrap("content", 0) == 0, "text wrapping has no rows at zero width")
+local input = {
+  render = function()
+    return { lines = { { { "ab", "" }, { "中", "cursor" } } } }
+  end,
+}
+local input_lines, cursor_row = Text.wrap_input(input, 2)
+check(
+  #input_lines == 2
+    and input_lines[1][1][1] == "ab"
+    and input_lines[2][1][1] == "中"
+    and input_lines[2][1][2] == "cursor"
+    and cursor_row == 2,
+  "input wrapping preserves spans and tracks the wrapped cursor"
+)
+input_lines, cursor_row = Text.wrap_input(input, 1)
+check(
+  #input_lines == 3 and input_lines[3][1][1] == " " and input_lines[3][1][2] == "cursor" and cursor_row == 3,
+  "input wrapping retains narrow Unicode cursor fallback"
+)
+input_lines, cursor_row = Text.wrap_input(input, 0)
+check(#input_lines == 1 and #input_lines[1] == 0 and cursor_row == 1, "input wrapping keeps zero-width cursor row")
 local host_width, host_truncate = maki.ui.display_width, maki.ui.truncate_text
 local scanned, calls = 0, 0
 maki.ui.display_width = function(value)

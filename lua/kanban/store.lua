@@ -1,4 +1,7 @@
-local STATUSES = { todo = true, doing = true, done = true }
+local STATUSES = {}
+for _, status in ipairs(require("kanban.status")) do
+  STATUSES[status] = true
+end
 
 local function is_status(value)
   return type(value) == "string" and STATUSES[value] == true
@@ -61,7 +64,13 @@ end
 local function by_id(a, b)
   local na, nb = id_number(a), id_number(b)
   if na and nb then
-    return na < nb
+    if na ~= nb then
+      return na < nb
+    end
+  elseif na then
+    return true
+  elseif nb then
+    return false
   end
   return a < b
 end
@@ -102,11 +111,6 @@ local function read_tasks(path)
 end
 
 local function write_tasks(path, dir, tasks)
-  local verr = validate_data({ tasks = tasks })
-  if verr then
-    return nil, verr
-  end
-
   local encoded, eerr = maki.json.encode({ tasks = tasks })
   if not encoded then
     return nil, "could not encode store: " .. tostring(eerr)

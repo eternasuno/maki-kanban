@@ -42,8 +42,8 @@ check(
   "description creation stores draft and fixed TODO status"
 )
 check(
-  fake.calls == lists_before + 2 and observed.detail:find("With description", 1, true),
-  "creation reloads once, focuses TODO and opens selected new task"
+  fake.calls == lists_before + 1 and observed.detail:find("With description", 1, true),
+  "creation opens new task without reloading hidden board"
 )
 check(#editor.removes == 1 and next(editor.files) == nil, "create description removes temporary file")
 maki.ui.open_editor = description_open
@@ -94,6 +94,51 @@ check(
   failed_create:handle_key("s", fake) == "created" and failed_create.task.status == "todo",
   "failed creation can retry successfully"
 )
+maki.ui.open_editor = description_open
+
+for _, failure in ipairs({ "false", "throw" }) do
+  reset_editor()
+  local creating = Task.new_create(80, 12)
+  creating.task.title = "Cleanup " .. failure
+  creating.task.description = "old description"
+  creating.focused_field = "description"
+  local draft = "new description " .. failure .. "\n中文"
+  maki.ui.open_editor = function(path)
+    editor.files[path] = draft
+    return 0
+  end
+  maki.fs.rm = function(path)
+    editor.removes[#editor.removes + 1] = path
+    if failure == "throw" then
+      error("cleanup threw")
+    end
+    return false, "cleanup failed"
+  end
+  check(creating:handle_key("<CR>", fake) == true, "create handles cleanup failure: " .. failure)
+  check(
+    creating.task.description == draft
+      and creating.description_draft == nil
+      and #editor.removes == 1
+      and row(creating:render(), 11):find("cleanup", 1, true),
+    "create retains new text and renders cleanup error: " .. failure
+  )
+  creating:handle_key("<Tab>", fake)
+  creating:handle_key("<CR>", fake)
+  creating:handle_paste(" title")
+  creating:handle_key("<CR>", fake)
+  check(row(creating:render(), 11):find("cleanup", 1, true), "title draft save keeps cleanup error: " .. failure)
+  check(
+    creating:handle_key("s", fake) == "created"
+      and fake.result.tasks[creating.task.id].description == draft
+      and row(creating:render(), 11):find("cleanup", 1, true),
+    "create persists new description without hiding cleanup error: " .. failure
+  )
+  creating:handle_key("<CR>", fake)
+  creating:handle_paste(" saved")
+  check(creating:handle_key("<CR>", fake) == "changed", "normal title saves after creation: " .. failure)
+  check(row(creating:render(), 11):find("cleanup", 1, true), "normal title save keeps cleanup error: " .. failure)
+end
+reset_editor()
 maki.ui.open_editor = description_open
 
 local cancel_creates = fake.creates

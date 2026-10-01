@@ -69,6 +69,12 @@ local function handle_reference(board, win)
   return "quit"
 end
 
+local function reload_board(state)
+  if state.board:reload(store, state.return_task_id) then
+    state.return_task_id = nil
+  end
+end
+
 local function handle_board_key(state, buf, win, key)
   if state.board:is_modal() then
     if state.board:handle_key(key, store) == "quit" then
@@ -79,13 +85,19 @@ local function handle_board_key(state, buf, win, key)
     return "quit"
   elseif key == "a" then
     return handle_reference(state.board, win)
+  elseif key == "r" then
+    reload_board(state)
+    buf:set_lines(state.board:render())
   elseif key == "n" then
+    local selected = state.board:selected_task()
+    state.return_task_id = selected and selected.id or state.return_task_id
     state.task = Task.new_create(state.width, state.height)
     state.view = "task"
     buf:set_lines(state.task:render())
   elseif key == "<CR>" or key == "<Enter>" then
     local selected = state.board:selected_task()
     if selected then
+      state.return_task_id = selected.id
       state.task = Task.new(selected, state.width, state.height)
       state.view = "task"
       buf:set_lines(state.task:render())
@@ -100,12 +112,11 @@ local function handle_task_key(state, buf, key)
   if action == "quit" then
     return "quit"
   elseif action == "deleted" or action == "back" then
-    state.board:reload(store)
+    reload_board(state)
     state.view, state.task = "board", nil
     buf:set_lines(state.board:render())
   elseif action == "created" or action == "changed" then
-    state.board:reload(store)
-    state.board:select_task(state.task.task.id)
+    state.return_task_id = state.task.task.id
     buf:set_lines(state.task:render())
   elseif action then
     buf:set_lines(state.task:render())

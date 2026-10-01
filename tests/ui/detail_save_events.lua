@@ -7,14 +7,15 @@ run({
   { type = "key", key = "<End>" },
   { type = "key", key = "X" },
   { type = "key", key = "<CR>" },
+  function()
+    check(fake.calls == calls_before + 1, "title save does not reload hidden board")
+  end,
   { type = "key", key = "<Esc>" },
   { type = "key", key = "q" },
 })
 check(
-  fake.result.tasks["task-1"].title == "BeforeX"
-    and fake.calls == calls_before + 3
-    and snapshot():find("BeforeX", 1, true),
-  "title save reloads board card"
+  fake.result.tasks["task-1"].title == "BeforeX" and snapshot():find("BeforeX", 1, true),
+  "return to board shows saved title"
 )
 
 fake.result = { tasks = { ["task-1"] = { title = "Moving", description = "d", status = "todo" } } }
@@ -61,14 +62,18 @@ run({
   { type = "key", key = "<CR>" },
   { type = "key", key = "<Tab>" },
   { type = "key", key = "<CR>" },
+  function()
+    check(fake.calls == calls_before + 1, "description save does not reload hidden board")
+  end,
   { type = "key", key = "<Esc>" },
+  { type = "key", key = "<CR>" },
+  function()
+    check(snapshot():find("edited", 1, true), "reopened task has saved description")
+  end,
   { type = "key", key = "q" },
 })
 check(
-  opened_path
-    and fake.result.tasks["task-1"].description == "edited\nline"
-    and fake.calls == calls_before + 3
-    and not editor.files[opened_path],
-  "description save refreshes board cache and removes temp file"
+  opened_path and fake.result.tasks["task-1"].description == "edited\nline" and not editor.files[opened_path],
+  "description save persists and removes temp file"
 )
 maki.ui.open_editor = description_open

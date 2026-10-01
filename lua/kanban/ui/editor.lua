@@ -43,16 +43,17 @@ function Editor.edit(original)
   if not ok then
     text, err = nil, tostring(text)
   end
+  local cleanup_err
   if path then
-    local cleaned, removed, cleanup_err = pcall(maki.fs.rm, path)
+    local cleaned, removed, remove_err = pcall(maki.fs.rm, path)
     if not cleaned then
-      cleanup_err = removed
+      remove_err = removed
     end
     if not cleaned or not removed then
-      err = err or tostring(cleanup_err or "could not remove temporary file")
+      cleanup_err = tostring(remove_err or "could not remove temporary file")
     end
   end
-  return text, err
+  return text, err, cleanup_err
 end
 
 return Editor
