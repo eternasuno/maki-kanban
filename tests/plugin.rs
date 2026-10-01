@@ -166,7 +166,7 @@ fn store_batch_crud_defaults_id_reuse_and_reload() {
         assert(read["task-2"].title == "renamed" and read["task-1"].status == "doing")
         local deleted = assert(store:delete_many({ "task-1", "task-2" }))
         assert(deleted["task-1"].status == "doing" and deleted["task-2"].title == "renamed")
-        assert(next(assert(store:load()).tasks) == nil)
+        assert(#assert(store:list()) == 0)
         assert(assert(store:create_many({ { title = "reused" }, { title = "kept" } }))["task-1"].title == "reused")
         assert(store:delete_many({ "task-1" }))
         assert(assert(store:create_many({ { title = "lowest hole" } }))["task-1"].title == "lowest hole")
@@ -175,7 +175,8 @@ fn store_batch_crud_defaults_id_reuse_and_reload() {
         assert(#listed == 2 and listed[1].id == "task-2" and listed[2].id == "task-10")
         assert(listed[2].description == "" and listed[2].status == "done")
         assert(assert(store:get_many({ "task-10" }))["task-10"].title == "external")
-        assert(store:save())
+        local filled = assert(store:create_many({ { title = "first hole" }, { title = "next hole" } }))
+        assert(filled["task-1"].title == "first hole" and filled["task-3"].title == "next hole")
         data = assert(maki.json.decode(assert(maki.fs.read(path))))
         assert(data.tasks["task-10"].description == "" and data.tasks["task-10"].id == nil)
         "#,
@@ -237,7 +238,6 @@ fn store_corrupt_data_and_filesystem_write_failure_are_non_destructive() {
             function() return store:create_many({ { title = "new" } }) end,
             function() return store:update_many({ ["task-1"] = { status = "done" } }) end,
             function() return store:delete_many({ "task-1" }) end,
-            function() return store:save() end,
         }) do
             local value, err = operation()
             assert(value == nil and err:find("could not create store directory:", 1, true), tostring(err))
@@ -247,13 +247,11 @@ fn store_corrupt_data_and_filesystem_write_failure_are_non_destructive() {
         for _, corrupt in ipairs({ "{broken", "[]", '{"tasks":[{"title":"array","status":"todo"}]}', '{"tasks":{"task-1":{"title":"","status":"todo"}}}', '{"tasks":{"task-1":{"title":"bad","status":"unknown"}}}', '{"tasks":{"task-1":{"title":"bad","description":1,"status":"todo"}}}' }) do
             assert(maki.fs.write(path, corrupt))
             for _, operation in ipairs({
-                function() return store:load() end,
                 function() return store:list() end,
                 function() return store:get_many({ "task-1" }) end,
                 function() return store:create_many({ { title = "new" } }) end,
                 function() return store:update_many({ ["task-1"] = { title = "changed" } }) end,
                 function() return store:delete_many({ "task-1" }) end,
-                function() return store:save() end,
             }) do
                 local value, err = operation()
                 assert(value == nil and err:find("invalid kanban store:", 1, true), tostring(err))
@@ -543,7 +541,6 @@ fn store_atomic_write_failure_preserves_existing_json() {
                 function() return store:create_many({{ {{ title = "new" }} }}) end,
                 function() return store:update_many({{ ["task-1"] = {{ status = "done" }} }}) end,
                 function() return store:delete_many({{ "task-1" }}) end,
-                function() return store:save() end,
             }}) do
                 local value, err = operation()
                 assert(value == nil and err:find("could not write store:", 1, true), tostring(err))

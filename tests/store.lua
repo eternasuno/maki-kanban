@@ -374,9 +374,8 @@ end
 local function test_missing()
   local path = fresh()
   local s = Store.new(path)
-  local board = assert(s:load())
-  eq(next(board.tasks), nil, "missing board is empty")
-  eq(#s:list(), 0, "missing list is empty")
+  eq(#assert(s:list()), 0, "missing list is empty")
+  eq(read_file(path), nil, "list does not create missing store")
   for _, method in ipairs({ "get_many", "update_many", "delete_many" }) do
     local input = method == "update_many" and { ["task-1"] = { title = "A" } } or { "task-1" }
     local result, err = s[method](s, input)
@@ -384,8 +383,9 @@ local function test_missing()
     eq(err, "task not found: task-1", method .. " missing error")
     eq(read_file(path), nil, method .. " does not create file")
   end
-  ok(s:save(), "save preserves missing-store behavior")
-  eq(#s:list(), 0, "save creates empty board")
+  eq(assert(s:create_many({ { title = "first" } }))["task-1"].id, "task-1", "first mutation creates store")
+  ok(s:delete_many({ "task-1" }), "delete last task")
+  eq(#assert(Store.new(path):list()), 0, "CRUD persists empty board")
 end
 
 local function test_success()
@@ -462,6 +462,7 @@ local function test_rejected()
       { key = "task-1" },
       { [2] = "task-1" },
       { [1] = "task-1", [3] = "task-2" },
+      -- selene: allow(mixed_table)
       { "task-1", extra = true },
     }) do
       reject(method, input, method .. " rejects non-array/empty/sparse/mixed input")
@@ -538,8 +539,6 @@ local function test_malformed()
   }) do
     write_raw(path, broken)
     for _, operation in ipairs({
-      { "load" },
-      { "save" },
       { "list" },
       { "get_many", { "task-1" } },
       { "create_many", { { title = "A" }, { title = "B" } } },
@@ -569,6 +568,67 @@ local function test_reload()
   )
   eq(s:delete_many({ "task-1" })["task-1"].status, "doing", "delete returns latest fields")
   eq(#s:list(), 2, "external replacement not overwritten")
+end
+
+local function test_allocation_counts()
+  local info = debug.getinfo(Store.create_many, "S")
+  local source = assert(read_file(info.source:sub(2)))
+  local computation_lines = {}
+  local line_number = 0
+  for line in (source .. "\n"):gmatch("([^\n]*)\n") do
+    line_number = line_number + 1
+    if
+      line_number >= info.linedefined
+      and line_number <= info.lastlinedefined
+      and line:find('"task-" .. candidate', 1, true)
+    then
+      computation_lines[line_number] = true
+    end
+  end
+  ok(next(computation_lines) ~= nil, "candidate computation lines found")
+  for _, sizes in ipairs({ { 0, 32 }, { 32, 1 }, { 32, 32 }, { 64, 64 } }) do
+    local prefix, batch = sizes[1], sizes[2]
+    local s = Store.new(fresh())
+    local inputs = {}
+    for i = 1, prefix do
+      inputs[i] = { title = "existing " .. i }
+    end
+    if prefix > 0 then
+      assert(s:create_many(inputs))
+    end
+    inputs = {}
+    for i = 1, batch do
+      inputs[i] = { title = "new " .. i }
+    end
+    local computations = 0
+    local old_hook, old_mask, old_count = debug.gethook()
+    debug.sethook(function(_, line)
+      if computation_lines[line] and debug.getinfo(2, "f").func == Store.create_many then
+        computations = computations + 1
+      end
+    end, "l")
+    local succeeded, created = pcall(s.create_many, s, inputs)
+    debug.sethook(old_hook, old_mask, old_count)
+    assert(succeeded, created)
+    assert(created, "batch creation must succeed during allocation measurement")
+    eq(computations, prefix + batch, "candidate computations are prefix plus batch")
+    eq(created["task-" .. (prefix + 1)].title, "new 1", "allocation starts at lowest free ID")
+    eq(created["task-" .. (prefix + batch)].title, "new " .. batch, "allocation ends without collisions")
+  end
+end
+
+local function test_normalization()
+  local path = fresh()
+  local s = Store.new(path)
+  write_raw(path, '{"tasks":{"task-2":{"id":"ignored","title":"external","status":"done"}}}')
+  eq(assert(s:get_many({ "task-2" }))["task-2"].description, "", "read normalizes missing description")
+  local created = assert(s:create_many({ { title = "first hole" }, { title = "next hole" } }))
+  eq(created["task-1"].title, "first hole", "reload fills first hole")
+  eq(created["task-3"].title, "next hole", "reload skips occupied ID")
+  local persisted = assert(maki.json.decode(assert(read_file(path)))).tasks
+  eq(persisted["task-2"].description, "", "CRUD persists normalized description")
+  eq(persisted["task-2"].id, nil, "CRUD strips stored body ID")
+  eq(persisted["task-2"].status, "done", "CRUD preserves external status")
 end
 
 local function test_io_counts()
@@ -637,6 +697,9 @@ local function test_persistence_failure()
       eq(read_file(path), before, "persistence failure preserves bytes")
     end
   end
+  local recovered = assert(s:create_many({ { title = "D" }, { title = "E" } }))
+  eq(recovered["task-4"].title, "D", "failed writes consume no first ID")
+  eq(recovered["task-5"].title, "E", "failed writes consume no second ID")
   ok(s:delete_many({ "task-1", "task-2" }), "write recovers")
 end
 
@@ -678,6 +741,8 @@ local tests = {
   test_rejected,
   test_malformed,
   test_reload,
+  test_allocation_counts,
+  test_normalization,
   test_io_counts,
   test_persistence_failure,
 }

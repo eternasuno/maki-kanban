@@ -9,9 +9,13 @@ maki-kanban is a Lua plugin for Maki 0.5.7+. Tasks represent project-level user 
 - `lua/kanban/store.lua`: validation, IDs, persistence and batch CRUD; shared by tools and UI.
 - `lua/kanban/tools.lua`: tool schemas and JSON/error responses.
 - `lua/kanban/ui.lua`: window lifecycle and event routing.
-- `lua/kanban/ui/board.lua`: board rendering, selection and batch actions.
-- `lua/kanban/ui/task.lua`: detail/create forms and field editing.
-- `tests/store.lua`, `tests/ui.lua`: standalone regression scripts with Maki API shims.
+- `lua/kanban/ui/board.lua`, `task.lua`: board selection/batch actions and detail/create field editing.
+- `lua/kanban/ui/board_view.lua`, `task_view.lua`: layout and rendering; Task description wrapping is cached by content and effective width.
+- `lua/kanban/ui/display.lua`: shared display fitting, styles and help overlay.
+- `lua/kanban/ui/editor.lua`: temporary files and external editor lifecycle.
+- `tests/store.lua`: standalone Store/tool regression script with Maki API shims.
+- `tests/ui.lua`, `tests/ui/`: isolated UI behavior groups and fresh host/Store fixtures.
+- `tests/plugin.rs`: real-host integration tests with disposable working directories.
 
 ## Change guardrails
 
@@ -33,9 +37,12 @@ Run from the repository root:
 ```sh
 lua tests/store.lua
 lua tests/ui.lua
+just lua-fmt-check
+just lua-lint
+cargo test --locked
 ```
 
-Add regression coverage to the corresponding script when changing behavior. The scripts use host shims; passing them does not verify the real interactive UI.
+Add regression coverage to the corresponding script or UI behavior group when changing behavior. Run selected groups with `lua tests/ui.lua description_retry task_cache board_lazy`; each group initializes fresh fixtures and must be order-independent. The scripts use host shims; passing them does not verify the real interactive UI.
 
 For host integration changes, use a disposable working directory and check registration with `maki prompt --tools --names`, then open `/kanban`. For UI changes, exercise affected actions, error paths, narrow layouts and resizing. Use interactive `/reload` after Lua edits; report any manual checks that were not performed.
 

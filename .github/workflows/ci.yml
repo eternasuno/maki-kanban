@@ -49,5 +49,6 @@ jobs:
       - name: Run Lua regression tests
         shell: devenv shell -- bash -e {0}
         run: |
-          lua tests/store.lua
-          lua tests/ui.lua
+          just lua-fmt-check
+          just lua-lint
+          just lua-test

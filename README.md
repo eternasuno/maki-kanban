@@ -23,20 +23,20 @@ Run `/kanban` to open the TODO, DOING and DONE board. Narrow windows show only t
 | `g` / `G` | First / last task in the column |
 | Enter | Open task details |
 | Space | Mark / unmark a task |
-| `<` / `>` | Move marked tasks one status step, or the selected task if none are marked |
+| `<` / `>` | Move the union of marked tasks and the cursor task one status step |
 | `n` | Open the create form |
 | `a` | Insert `[task:<id>] <title>` references into Maki input without submitting |
-| `d` | Confirm deletion of marked tasks, or the selected task |
+| `d` | Confirm deletion of the union of marked tasks and the cursor task |
 | `r` | Reload tasks |
 | `q` / Esc / Ctrl-C | Close the board |
 
-Marks survive reloads while their task IDs exist. Moves and deletes are all-or-nothing; a move fails if any targeted task is already at the requested status boundary. Reference insertion uses marked tasks, or the selected task when none are marked.
+Marks survive reloads while their task IDs remain in the focused column; switching columns clears marks. Moves, deletes and reference insertion target the union of marked tasks and the cursor task, without duplicates. Moves and deletes are all-or-nothing; moves stop at the first and last status.
 
 ### Task details and creation
 
 - Use `j` / `k`, arrows or Tab / Shift+Tab to focus Title or Description; Enter edits the field.
 - Title editing: Enter saves the edit, Esc cancels it. In Create, this only updates the draft.
-- Description editing opens an external editor through `$VISUAL` / `$EDITOR`. Save and exit successfully to apply changes; failed edits leave the description unchanged.
+- Description editing opens an external editor through `$VISUAL` / `$EDITOR`. Save and exit successfully to apply changes. If saving fails, the persisted description remains unchanged and the edited text is retained as a draft. Enter on Description opens that draft; exiting successfully retries saving even without further edits. Leaving task details discards the unsaved draft.
 - In details, `<` / `>` saves the previous / next status, `d` asks to delete, and Esc returns to the board. Use `J` / `K`, PageDown / PageUp or `g` / `G` to scroll the description.
 - In Create, `s` creates the task in `todo`; Esc discards the form. Finishing a field edit does not create a task.
 - Outside field editing, `q` / Ctrl-C closes Kanban. Help is modal: `?` / Esc closes help and Ctrl-C quits. During deletion confirmation, only `y` confirms; every other key cancels.
@@ -84,10 +84,12 @@ just check
 just lint
 just test
 just lua-test
+just lua-fmt-check
+just lua-lint
 ```
 
 The Rust integration tests follow `lu-zero/maki-lua-plugin-template`'s test-only Cargo package pattern, loading the plugin through the real Maki `PluginHost` with `PluginPermissions::trusted()`. A separate test grants only the permissions declared in `plugin.toml`. The three Maki dev-dependencies follow the upstream default branch without a `rev` in `Cargo.toml`; `Cargo.lock` records the exact revision tested. Use `cargo update -p maki-lua` to update the shared Maki source, then run the integration suite. CI uses `--locked` for reproducible verification. They cover registration, real filesystem/JSON behavior, batch validation, tool dispatch and window lifecycle. Each test runs in a subprocess with a disposable working directory so the project's `.maki/kanban.json` is never accessed. Rust 1.88 or newer and native build tools are required; the devenv environment supplies Rust and Lua.
 
-The Lua scripts use local Maki API shims. Host integration tests observe UI channels, not terminal rendering. For real-host checks, start Maki in a disposable project directory, verify tool registration with `maki prompt --tools --names`, and exercise `/kanban`, editing, batch actions and resizing. Use interactive `/reload` after Lua changes and `maki --no-jit` for clearer Lua stack traces.
+The Lua scripts use local Maki API shims. `tests/ui.lua` runs isolated behavior groups in `tests/ui/`, each with fresh host, Store, editor and event state. Run selected groups with `lua tests/ui.lua description_retry task_cache board_lazy`; group order does not matter. UI state/editing lives in `board.lua` and `task.lua`, rendering in `board_view.lua` and `task_view.lua`, shared display helpers in `display.lua`, and external editor cleanup in `editor.lua`. Host integration tests observe UI channels, not terminal rendering. For real-host checks, start Maki in a disposable project directory, verify tool registration with `maki prompt --tools --names`, and exercise `/kanban`, editing, batch actions and resizing. Use interactive `/reload` after Lua changes and `maki --no-jit` for clearer Lua stack traces.
 
 See `AGENTS.md` for project structure and change guardrails.
