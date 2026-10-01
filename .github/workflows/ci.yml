@@ -34,6 +34,11 @@ jobs:
       - name: Install devenv
         run: nix profile add nixpkgs#devenv
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cmd-format: devenv shell -- {0}
+
       - name: Run Rust integration tests
         shell: devenv shell -- bash -e {0}
         run: |
