@@ -182,11 +182,23 @@ function text_input.new()
   end
   function self:insert_text(value)
     value = tostring(value or "")
-    for i = 1, #value do
-      table.insert(self.chars, self.cursor, value:sub(i, i))
+    for char in value:gmatch(".[\128-\191]*") do
+      table.insert(self.chars, self.cursor, char)
       self.cursor = self.cursor + 1
     end
     return text_input.Result.CHANGED
+  end
+  function self:render(prefix, prefix_width, render_width)
+    assert(prefix == "" and prefix_width == 0 and render_width == nil, "title render must not use codepoint wrapping")
+    return {
+      lines = { {
+        { prefix, "dim" },
+        { table.concat(self.chars, "", 1, self.cursor - 1), "" },
+        { self.chars[self.cursor] or " ", "cursor" },
+        { table.concat(self.chars, "", self.cursor + 1), "" },
+      } },
+      cursor_row = 1,
+    }
   end
   function self:handle_key(key)
     if key == "<Left>" then
@@ -220,7 +232,7 @@ function text_input.new()
       end
       return text_input.Result.IGNORED
     end
-    if type(key) == "string" and #key == 1 and key:byte() >= 32 then
+    if type(key) == "string" and key:match("^.[\128-\191]*$") and key:byte() >= 32 then
       return self:insert_text(key)
     end
     return text_input.Result.IGNORED
@@ -336,6 +348,23 @@ local function text(line)
     out[#out + 1] = span[1]
   end
   return table.concat(out)
+end
+local function cursor(task)
+  local found, count = nil, 0
+  for row_index, line in ipairs(task:render()) do
+    local column = 0
+    if type(line) == "table" then
+      for _, span in ipairs(line) do
+        if span[2] == "cursor" then
+          count = count + 1
+          found = { row = row_index, column = column, text = span[1] }
+        end
+        column = column + width(span[1])
+      end
+    end
+  end
+  check(count <= 1, "title renders at most one cursor span")
+  return found
 end
 local function run(events, term)
   EVENTS, TERM = events, term or { cols = 100, rows = 30 }
@@ -1170,6 +1199,14 @@ edit.focused_field = "title"
 fake.result = { tasks = { ["task-1"] = { title = "abc", description = "old", status = "todo" } } }
 fake.update_error = nil
 check(edit:handle_key("<CR>", fake) and edit.editing == "title", "Enter begins title editing")
+check(cursor(edit).text == " " and cursor(edit).column == 6, "existing title shows trailing cursor")
+check(edit:render()[2][2][2].fg == "#7799ff", "editing title marker uses accent color")
+check(edit:render()[2][3][2].fg == "#eeeeee", "editing title text keeps foreground color")
+for _, move in ipairs({ { "<Left>", "c", 5 }, { "<Home>", "a", 3 }, { "<Right>", "b", 4 }, { "<End>", " ", 6 } }) do
+  edit:handle_key(move[1], fake)
+  local current = cursor(edit)
+  check(current.text == move[2] and current.column == move[3], move[1] .. " moves visible title cursor")
+end
 check(
   edit:handle_key("<Left>", fake)
     and edit:handle_key("<BS>", fake)
@@ -1178,6 +1215,8 @@ check(
   "title cursor editing and newline paste"
 )
 check(edit:handle_key("<Esc>", fake) and edit.task.title == "abc" and not edit.editing, "title cancel discards draft")
+check(not cursor(edit), "cancel removes title cursor")
+check(edit:render()[2][2][2].fg == "#eeeeee", "cancel restores title marker foreground")
 edit:handle_key("<CR>", fake)
 edit:handle_paste("new")
 fake.update_error = "no title write"
@@ -1189,6 +1228,8 @@ check(
     and edit.task.title == "abc",
   "title update failure keeps editing and error"
 )
+check(cursor(edit).text == " " and cursor(edit).column == 9, "failed title save retains draft cursor")
+check(edit:render()[2][2][2].fg == "#7799ff", "failed title save retains accent marker")
 fake.update_error = nil
 edit:handle_key("<Esc>", fake)
 edit:handle_key("<CR>", fake)
@@ -1221,6 +1262,8 @@ check(
     and #fake.updates == literal_updates + 1,
   "Enter saves title and exits editing"
 )
+check(not cursor(edit), "successful title save removes cursor")
+check(edit:render()[2][2][2].fg == "#eeeeee", "successful save restores title marker foreground")
 edit:handle_key("<CR>", fake)
 check(
   edit:handle_key("<C-c>", fake) == "quit" and #fake.updates == literal_updates + 1,
@@ -1712,14 +1755,47 @@ check(
   "second Esc exits creation to board"
 )
 
+local cursor_create = Task.new_create(9, 12)
+cursor_create:handle_key("<CR>", fake)
+check(cursor(cursor_create).text == " " and not row(cursor_create:render(), 2):find("Title", 1, true), "empty create shows cursor without placeholder")
+cursor_create:handle_paste("abcdefghijklmnop")
+check(cursor(cursor_create).row == 3 and cursor_create.title_offset == 2, "long title follows end cursor across two rows")
+check(row(cursor_create:render(), 2):find("klmno", 1, true) and row(cursor_create:render(), 3):find("p ", 1, true), "long title viewport retains two styled content rows")
+cursor_create:handle_key("<Home>", fake)
+check(cursor(cursor_create).row == 2 and cursor(cursor_create).text == "a" and cursor_create.title_offset == 0, "Home scrolls long title back to start")
+for _ = 1, 10 do
+  cursor_create:handle_key("<Right>", fake)
+end
+check(cursor(cursor_create).row == 3 and cursor(cursor_create).text == "k" and cursor_create.title_offset == 1, "arrows scroll long title viewport")
+cursor_create:handle_key("<End>", fake)
+cursor_create:resize(9, 7)
+check(cursor(cursor_create).row == 2, "one visible title row still tracks cursor")
+cursor_create:resize(30, 12)
+check(cursor(cursor_create).row == 2 and cursor_create.title_offset == 0, "widening clamps title viewport")
+cursor_create:handle_key("<CR>", fake)
+check(not cursor(cursor_create), "create title completion removes cursor")
+
 local resized_create = Task.new_create(80, 12)
 resized_create:handle_key("<CR>", fake)
 resized_create:handle_paste("中文创建标题中文创建标题")
-for _, size in ipairs({ { 20, 10 }, { 3, 4 }, { 1, 1 }, { 0, 0 }, { 80, 12 } }) do
+for _, size in ipairs({ { 20, 10 }, { 9, 12 }, { 6, 12 }, { 5, 12 }, { 4, 12 }, { 3, 12 }, { 2, 12 }, { 3, 4 }, { 1, 1 }, { 0, 0 }, { 80, 12 } }) do
   resized_create:resize(size[1], size[2])
   check(#resized_create:render() == size[2], "create resize respects height")
   for _, line in ipairs(resized_create:render()) do
     check(width(text(line)) <= size[1], "create resize stays within display width")
+  end
+end
+for _, size in ipairs({ 20, 9, 6, 5, 80 }) do
+  resized_create:resize(size, 12)
+  resized_create:handle_key("<Home>", fake)
+  local current = cursor(resized_create)
+  check(current and current.text == (size == 5 and " " or "中"), "CJK Home cursor fits available content width")
+  resized_create:handle_key("<Right>", fake)
+  check(cursor(resized_create).text == (size == 5 and " " or "文"), "CJK arrow moves by codepoint")
+  resized_create:handle_key("<End>", fake)
+  check(cursor(resized_create).text == " ", "CJK end cursor remains visible after resize")
+  for _, line in ipairs(resized_create:render()) do
+    check(width(text(line)) <= size, "CJK cursor movement stays within bounds")
   end
 end
 check(

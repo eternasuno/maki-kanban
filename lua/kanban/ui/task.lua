@@ -91,6 +91,42 @@ local function wrap(text, width)
   return lines
 end
 
+local function wrap_input(input, width)
+  local lines, cursor_row = { {} }, 1
+  if width <= 0 then
+    return lines, cursor_row
+  end
+  local used = 0
+  for _, source in ipairs(input:render("", 0).lines) do
+    for _, span in ipairs(source) do
+      local remaining = span[1]
+      while remaining ~= "" do
+        local part = maki.ui.truncate_text(remaining, width - used)
+        if part.head ~= "" then
+          local line = lines[#lines]
+          line[#line + 1] = { part.head, span[2] }
+          if span[2] == "cursor" then
+            cursor_row = #lines
+          end
+          used = used + maki.ui.display_width(part.head)
+          remaining = part.tail
+        elseif used > 0 then
+          lines[#lines + 1], used = {}, 0
+        else
+          local char = remaining:match("^.[\128-\191]*")
+          if span[2] == "cursor" then
+            local line = lines[#lines]
+            line[#line + 1] = { " ", "cursor" }
+            cursor_row, used = #lines, 1
+          end
+          remaining = remaining:sub(#char + 1)
+        end
+      end
+    end
+  end
+  return lines, cursor_row
+end
+
 local function status_color(status)
   return (maki.ui.theme_style(status == "doing" and "warning" or status == "done" and "success" or "accent") or {}).fg
 end
@@ -115,16 +151,25 @@ function Task:resize(width, height)
   self.pane_height = self.height - self.footer_height - self.footer_gap
   self.viewport = math.max(0, self.pane_height - PANE_BORDERS - TITLE_HEIGHT - FIELD_GAP - DESCRIPTION_LABEL_HEIGHT)
   local inner = math.max(0, self.width - 2 - maki.ui.display_width("▸ "))
-  local title_text = self.title_input and self.title_input:value() or self.task.title or ""
-  local title = wrap(title_text, inner)
-  while #title < 2 do
-    title[#title + 1] = ""
+  if self.title_input then
+    local title, cursor_row = wrap_input(self.title_input, inner)
+    local visible = math.max(1, math.min(TITLE_HEIGHT, self.pane_height - PANE_BORDERS))
+    local offset = math.min(self.title_offset or 0, math.max(0, #title - visible))
+    offset = math.max(math.min(offset, cursor_row - 1), cursor_row - visible)
+    self.title_offset = offset
+    self.title_lines = { title[offset + 1] or {}, title[offset + 2] or {} }
+  else
+    local title = wrap(self.task.title or "", inner)
+    while #title < 2 do
+      title[#title + 1] = ""
+    end
+    if #title > 2 and inner > 0 then
+      local head = maki.ui.truncate_text(title[2], math.max(0, inner - 1)).head
+      title[2] = head .. "…"
+    end
+    self.title_offset = 0
+    self.title_lines = { title[1], title[2] }
   end
-  if #title > 2 and inner > 0 then
-    local head = maki.ui.truncate_text(title[2], math.max(0, inner - 1)).head
-    title[2] = head .. "…"
-  end
-  self.title_lines = { title[1], title[2] }
   self.status_color = status_color(self.creating and "todo" or self.task.status)
   self.description_lines = wrap(self.task.description or "", inner)
   if #self.description_lines == 0 then
@@ -254,7 +299,24 @@ function Task:render()
   local border = self.status_color
   local function pane_line(content, focused, marked)
     local marker = marked and focused and "▸ " or string.rep(" ", marker_width)
-    return { styled("│", border), styled(fit(marker .. content, inner), foreground, focused), styled("│", border) }
+    if type(content) == "string" then
+      return { styled("│", border), styled(fit(marker .. content, inner), foreground, focused), styled("│", border) }
+    end
+    local spans = { styled("│", border) }
+    marker = maki.ui.truncate_text(marker, inner).head
+    local marker_color = foreground
+    if self.editing == "title" and focused and marked then
+      marker_color = (maki.ui.theme_style("accent") or {}).fg or foreground
+    end
+    spans[#spans + 1] = styled(marker, marker_color, focused)
+    local used = maki.ui.display_width(marker)
+    for _, span in ipairs(content) do
+      spans[#spans + 1] = span[2] == "" and styled(span[1], foreground, focused) or span
+      used = used + maki.ui.display_width(span[1])
+    end
+    spans[#spans + 1] = styled(string.rep(" ", math.max(0, inner - used)), foreground, focused)
+    spans[#spans + 1] = styled("│", border)
+    return spans
   end
   for row = 1, self.pane_height do
     if width < 2 or self.pane_height < 2 then
