@@ -138,9 +138,14 @@ for _, facility in ipairs({ "write", "open_editor", "read", "rm" }) do
     end
     error(facility .. " threw")
   end
-  local value, err = Editor.edit("unchanged")
+  local value, err, cleanup_err = Editor.edit("unchanged")
   owner[facility] = original
   local expected = facility == "rm" and "unchanged" or nil
-  check(value == expected and err:find(facility .. " threw", 1, true), "editor catches thrown " .. facility)
+  local failure = facility == "rm" and cleanup_err or err
+  check(value == expected and failure:find(facility .. " threw", 1, true), "editor catches thrown " .. facility)
+  check(
+    facility == "rm" and err == nil or facility ~= "rm" and cleanup_err == nil,
+    "editor separates operation and cleanup errors: " .. facility
+  )
   check(next(editor.files) == nil and #editor.removes == 1, "editor attempts cleanup after thrown " .. facility)
 end

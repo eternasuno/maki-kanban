@@ -18,6 +18,7 @@ run({
   { type = "key", key = ">" },
   function()
     observed.retry_status = snapshot()
+    check(fake.calls == status_lists + 1, "successful status retry does not reload hidden board")
   end,
   { type = "key", key = "<Esc>" },
   function()
@@ -103,6 +104,10 @@ run({
   { type = "key", key = "s" },
   function()
     observed.success = snapshot()
+  end,
+  { type = "key", key = "<Esc>" },
+  function()
+    check((selected_title() or ""):find("▸ Preserved title", 1, true), "Create retry returns to selected new task")
   end,
   { type = "key", key = "q" },
 })

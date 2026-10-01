@@ -1,96 +1,14 @@
-use std::{path::Path, process::Command, sync::Arc, time::Duration};
+mod support;
 
-use maki_agent::{AgentMode, ToolOutput, tools::ToolRegistry};
-use maki_lua::{PluginHost, PluginPermissions, UiAction, WinCommand, WinEvent};
+use std::{path::Path, sync::Arc};
+
+use maki_lua::{PluginPermissions, UiAction, WinCommand, WinEvent};
 use serde_json::{Value, json};
 
-const PLUGIN_NAME: &str = "maki-kanban";
-const CHILD_TEST: &str = "MAKI_KANBAN_CHILD_TEST";
-const CHILD_CWD: &str = "MAKI_KANBAN_CHILD_CWD";
-const TIMEOUT: Duration = Duration::from_secs(10);
-
-fn in_disposable_project(name: &str) -> bool {
-    if std::env::var(CHILD_TEST).as_deref() == Ok(name) {
-        let expected = std::env::var_os(CHILD_CWD).expect("child fixture path missing");
-        assert_eq!(std::env::current_dir().unwrap(), Path::new(&expected));
-        return true;
-    }
-    let project = tempfile::tempdir().unwrap();
-    let output = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", name, "--nocapture"])
-        .env(CHILD_TEST, name)
-        .env(CHILD_CWD, project.path())
-        .current_dir(project.path())
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{name} failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    false
-}
-
-fn plugin_host() -> (Arc<ToolRegistry>, PluginHost) {
-    plugin_host_with_permissions(PluginPermissions::trusted())
-}
-
-fn plugin_host_with_permissions(permissions: PluginPermissions) -> (Arc<ToolRegistry>, PluginHost) {
-    let registry = Arc::new(ToolRegistry::new());
-    let host = PluginHost::new(Arc::clone(&registry)).unwrap();
-    host.load_package(
-        PLUGIN_NAME,
-        Path::new(env!("CARGO_MANIFEST_DIR")),
-        permissions,
-        Default::default(),
-    )
-    .unwrap();
-    (registry, host)
-}
-
-fn run_lua(host: &PluginHost, source: &str) {
-    host.send_run_init_lua(
-        source.to_owned(),
-        "kanban-integration-test.lua".to_owned(),
-        Some(Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()),
-    )
-    .unwrap();
-}
-
-fn with_store(host: &PluginHost, source: &str) {
-    let directory = tempfile::tempdir().unwrap();
-    let path = serde_json::to_string(&directory.path().join("nested/tasks.json")).unwrap();
-    run_lua(
-        host,
-        &format!(
-            "local Store = require(\"kanban.store\")\nlocal path = {path}\nlocal store = Store.new(path)\n{source}"
-        ),
-    );
-}
-
-fn exec_tool(registry: &ToolRegistry, name: &str, input: Value) -> Result<String, String> {
-    let entry = registry.get(name).expect("tool not registered");
-    let invocation = entry
-        .tool
-        .parse(&input)
-        .expect("tool input failed to parse");
-    let context = maki_agent::tools::test_support::stub_ctx(&AgentMode::Build);
-    smol::block_on(invocation.execute(&context))
-        .output
-        .map(|output| match output {
-            ToolOutput::Plain(output) => output.text,
-            other => panic!("unexpected tool output: {other:?}"),
-        })
-}
-
-fn tool_json(registry: &ToolRegistry, name: &str, input: Value) -> Value {
-    serde_json::from_str(&exec_tool(registry, name, input).unwrap()).unwrap()
-}
-
-fn persisted() -> Vec<u8> {
-    std::fs::read(".maki/kanban.json").unwrap()
-}
+use support::{
+    PLUGIN_NAME, TIMEOUT, exec_tool, in_disposable_project, persisted, plugin_host,
+    plugin_host_with_permissions, run_lua, tool_json, with_store,
+};
 
 #[test]
 fn package_registers_command_tools_and_stable_modules() {
@@ -184,6 +102,35 @@ fn store_batch_crud_defaults_id_reuse_and_reload() {
 }
 
 #[test]
+fn store_lists_mixed_string_ids_with_numeric_order_and_lexical_ties() {
+    if !in_disposable_project("store_lists_mixed_string_ids_with_numeric_order_and_lexical_ties") {
+        return;
+    }
+    let (_, host) = plugin_host();
+    with_store(
+        &host,
+        r#"
+        assert(store:create_many({ { title = "seed" } }))
+        for _, expected in ipairs({
+            { "task-2", "task-10", "", "alpha", "task-1x", "zeta" },
+            { "task-002", "task-02", "task-2", "task-010", "task-10" },
+        }) do
+            local tasks = {}
+            for _, id in ipairs(expected) do
+                tasks[id] = { title = "Task " .. id, status = "todo" }
+            end
+            assert(maki.fs.write(path, assert(maki.json.encode({ tasks = tasks }))))
+            local listed = assert(store:list())
+            assert(#listed == #expected, "sorting must preserve arbitrary string IDs")
+            for i, id in ipairs(expected) do
+                assert(listed[i].id == id, "unexpected ID at " .. i .. ": " .. listed[i].id)
+            end
+        end
+        "#,
+    );
+}
+
+#[test]
 fn store_invalid_and_missing_batches_preserve_file_bytes() {
     if !in_disposable_project("store_invalid_and_missing_batches_preserve_file_bytes") {
         return;
@@ -244,7 +191,15 @@ fn store_corrupt_data_and_filesystem_write_failure_are_non_destructive() {
             assert(maki.fs.read(path) == before and maki.fs.read(blocker) == "not a directory")
         end
         store.dir = maki.fs.dirname(path)
-        for _, corrupt in ipairs({ "{broken", "[]", '{"tasks":[{"title":"array","status":"todo"}]}', '{"tasks":{"task-1":{"title":"","status":"todo"}}}', '{"tasks":{"task-1":{"title":"bad","status":"unknown"}}}', '{"tasks":{"task-1":{"title":"bad","description":1,"status":"todo"}}}' }) do
+        for _, corrupt in ipairs({
+            "{broken",
+            "[]",
+            '{"tasks":[{"title":"array","status":"todo"}]}',
+            '{"tasks":{"task-1":{"title":"missing status"}}}',
+            '{"tasks":{"task-1":{"title":"","status":"todo"}}}',
+            '{"tasks":{"task-1":{"title":"bad","status":"unknown"}}}',
+            '{"tasks":{"task-1":{"title":"bad","description":1,"status":"todo"}}}',
+        }) do
             assert(maki.fs.write(path, corrupt))
             for _, operation in ipairs({
                 function() return store:list() end,

@@ -2,332 +2,93 @@ local script = (arg and arg[0]) or "tests/store.lua"
 local root = script:match("^(.*)[/\\]tests[/\\][^/\\]+$") or "."
 package.path = root .. "/lua/?.lua;" .. package.path
 
-local function read_file(path)
-  local f, err = io.open(path, "rb")
-  if not f then
-    return nil, err
-  end
-  local text = f:read("*a")
-  f:close()
-  return text
-end
-
-local function shell_ok(cmd)
-  local rc = os.execute(cmd)
-  return rc == true or rc == 0
-end
-
-local function quote(s)
-  return "'" .. s:gsub("'", "'\\''") .. "'"
-end
-
-local function json_escape(s)
-  return (
-    s:gsub('[%z\1-\31\\"]', function(c)
-      if c == '"' then
-        return '\\"'
-      end
-      if c == "\\" then
-        return "\\\\"
-      end
-      if c == "\n" then
-        return "\\n"
-      end
-      if c == "\r" then
-        return "\\r"
-      end
-      if c == "\t" then
-        return "\\t"
-      end
-      return string.format("\\u%04x", c:byte())
-    end)
-  )
-end
-
-local function array_len(t)
-  local n = 0
-  for k in pairs(t) do
-    if type(k) ~= "number" then
-      return nil
-    end
-    n = n + 1
-  end
-  return n
-end
-
-local function json_encode(v)
-  local tv = type(v)
-  if v == nil then
-    return "null"
-  elseif tv == "boolean" then
-    return v and "true" or "false"
-  elseif tv == "number" then
-    if v ~= v or v == math.huge or v == -math.huge then
-      return "null"
-    end
-    if math.floor(v) == v then
-      return string.format("%d", v)
-    end
-    return string.format("%.14g", v)
-  elseif tv == "string" then
-    return '"' .. json_escape(v) .. '"'
-  elseif tv == "table" then
-    local n = array_len(v)
-    if n and n > 0 then
-      local parts = {}
-      for i = 1, n do
-        parts[i] = json_encode(v[i])
-      end
-      return "[" .. table.concat(parts, ",") .. "]"
-    end
-    local parts = {}
-    for k, val in pairs(v) do
-      parts[#parts + 1] = json_encode(tostring(k)) .. ":" .. json_encode(val)
-    end
-    return "{" .. table.concat(parts, ",") .. "}"
-  end
-  return "null"
-end
-
-local function json_decode(text)
-  local pos = 1
-  local len = #text
-
-  local function fail(msg)
-    error(msg .. " at " .. pos, 0)
-  end
-
-  local function skip()
-    while true do
-      local c = text:sub(pos, pos)
-      if c == " " or c == "\t" or c == "\n" or c == "\r" then
-        pos = pos + 1
-      else
-        return
-      end
-    end
-  end
-
-  local parse_value
-
-  local function parse_string()
-    pos = pos + 1
-    local out = {}
-    while true do
-      local c = text:sub(pos, pos)
-      if c == "" then
-        fail("unterminated string")
-      elseif c == '"' then
-        pos = pos + 1
-        return table.concat(out)
-      elseif c == "\\" then
-        local e = text:sub(pos + 1, pos + 1)
-        if e == "n" then
-          out[#out + 1] = "\n"
-        elseif e == "t" then
-          out[#out + 1] = "\t"
-        elseif e == "r" then
-          out[#out + 1] = "\r"
-        elseif e == "b" then
-          out[#out + 1] = "\b"
-        elseif e == "f" then
-          out[#out + 1] = "\f"
-        elseif e == "u" then
-          out[#out + 1] = string.char(tonumber(text:sub(pos + 2, pos + 5), 16) % 256)
-          pos = pos + 4
-        else
-          out[#out + 1] = e
-        end
-        pos = pos + 2
-      else
-        out[#out + 1] = c
-        pos = pos + 1
-      end
-    end
-  end
-
-  local function parse_number()
-    local s = text:match("^-?%d+%.?%d*[eE]?[+-]?%d*", pos)
-    if not s or s == "" then
-      fail("invalid number")
-    end
-    pos = pos + #s
-    return tonumber(s)
-  end
-
-  local function parse_array()
-    pos = pos + 1
-    local out = {}
-    skip()
-    if text:sub(pos, pos) == "]" then
-      pos = pos + 1
-      return out
-    end
-    while true do
-      out[#out + 1] = parse_value()
-      skip()
-      local c = text:sub(pos, pos)
-      if c == "," then
-        pos = pos + 1
-        skip()
-      elseif c == "]" then
-        pos = pos + 1
-        return out
-      else
-        fail("expected ] or ,")
-      end
-    end
-  end
-
-  local function parse_object()
-    pos = pos + 1
-    local out = {}
-    skip()
-    if text:sub(pos, pos) == "}" then
-      pos = pos + 1
-      return out
-    end
-    while true do
-      skip()
-      if text:sub(pos, pos) ~= '"' then
-        fail("expected key")
-      end
-      local key = parse_string()
-      skip()
-      if text:sub(pos, pos) ~= ":" then
-        fail("expected :")
-      end
-      pos = pos + 1
-      out[key] = parse_value()
-      skip()
-      local c = text:sub(pos, pos)
-      if c == "," then
-        pos = pos + 1
-      elseif c == "}" then
-        pos = pos + 1
-        return out
-      else
-        fail("expected } or ,")
-      end
-    end
-  end
-
-  parse_value = function()
-    skip()
-    local c = text:sub(pos, pos)
-    if c == "{" then
-      return parse_object()
-    end
-    if c == "[" then
-      return parse_array()
-    end
-    if c == '"' then
-      return parse_string()
-    end
-    if c == "t" and text:sub(pos, pos + 3) == "true" then
-      pos = pos + 4
-      return true
-    end
-    if c == "f" and text:sub(pos, pos + 4) == "false" then
-      pos = pos + 5
-      return false
-    end
-    if c == "n" and text:sub(pos, pos + 3) == "null" then
-      pos = pos + 4
-      return nil
-    end
-    return parse_number()
-  end
-
-  local value = parse_value()
-  skip()
-  if pos <= len then
-    fail("trailing data")
-  end
-  return value
-end
-
-local maki = {}
-maki.uv = {
-  cwd = function()
-    local p = io.popen("pwd")
-    if not p then
-      return nil
-    end
-    local dir = p:read("*l")
-    p:close()
-    return dir
-  end,
-}
-
-maki.fs = {
-  metadata = function(path)
-    local f = io.open(path, "rb")
-    if not f then
-      return nil, nil
-    end
-    f:close()
-    return { path = path }, nil
-  end,
-  read = read_file,
-  dirname = function(path)
-    local dir = path:match("^(.*)[/\\][^/\\]*$")
-    if dir == nil or dir == "" then
-      return "."
-    end
-    return dir
-  end,
-  joinpath = function(...)
-    local parts = { ... }
-    local out = table.concat(parts, "/")
-    out = out:gsub("//+", "/")
-    return out
-  end,
-  mkdir = function(dir)
-    if dir == nil or dir == "" then
-      return true
-    end
-    if not shell_ok("mkdir -p " .. quote(dir)) then
-      return nil, "mkdir failed: " .. dir
-    end
-    return true
-  end,
-  atomic_write = function(path, text)
-    local tmp = path .. ".tmp"
-    local f, err = io.open(tmp, "wb")
-    if not f then
-      return nil, tostring(err)
-    end
-    f:write(text)
-    f:close()
-    local ok, rerr = os.rename(tmp, path)
-    if not ok then
-      return nil, tostring(rerr)
-    end
-    return true
-  end,
-}
-
-maki.json = {
-  encode = function(value)
-    local ok, text = pcall(json_encode, value)
-    if not ok then
-      return nil, text
-    end
-    return text
-  end,
-  decode = function(text)
-    local ok, value = pcall(json_decode, text)
-    if not ok then
-      return nil, value
-    end
-    if value == nil then
-      return nil, "empty document"
-    end
+local function clone(value)
+  if type(value) ~= "table" then
     return value
-  end,
-}
+  end
+  local copy = {}
+  for key, item in pairs(value) do
+    copy[key] = clone(item)
+  end
+  return copy
+end
 
+local files, snapshots, errors, calls = {}, { ["[]"] = {} }, {}, {}
+local next_token = 0
+local function called(name)
+  calls[name] = (calls[name] or 0) + 1
+  return errors[name]
+end
+
+local maki = {
+  uv = {
+    cwd = function()
+      return "/project"
+    end,
+  },
+  fs = {
+    metadata = function(path)
+      local err = called("metadata")
+      if err then
+        return nil, err
+      end
+      return files[path] ~= nil and {} or nil
+    end,
+    read = function(path)
+      local err = called("read")
+      if err then
+        return nil, err
+      end
+      if files[path] == nil then
+        return nil, "file not found"
+      end
+      return files[path]
+    end,
+    dirname = function(path)
+      return path:match("^(.*)/[^/]*$") or "."
+    end,
+    joinpath = function(...)
+      return table.concat({ ... }, "/")
+    end,
+    mkdir = function()
+      local err = called("mkdir")
+      if err then
+        return nil, err
+      end
+      return true
+    end,
+    atomic_write = function(path, token)
+      local err = called("atomic_write")
+      if err then
+        return nil, err
+      end
+      files[path] = token
+      return true
+    end,
+  },
+  json = {
+    encode = function(value)
+      local err = called("encode")
+      if err then
+        return nil, err
+      end
+      next_token = next_token + 1
+      local token = "snapshot-" .. next_token
+      snapshots[token] = clone(value)
+      return token
+    end,
+    decode = function(token)
+      local err = called("decode")
+      if err then
+        return nil, err
+      end
+      if snapshots[token] == nil then
+        return nil, "unknown snapshot token"
+      end
+      return clone(snapshots[token])
+    end,
+  },
+}
 _G.maki = maki
 
 local Store = require("kanban.store")
@@ -346,21 +107,14 @@ local function eq(got, want, msg)
   ok(got == want, msg .. " (got " .. tostring(got) .. ", want " .. tostring(want) .. ")")
 end
 
-local base = "/tmp/kanban-store-test-" .. tostring(os.time()) .. "-" .. tostring(math.random(1, 1000000))
-ok(shell_ok("mkdir -p " .. quote(base)), "create temp dir")
-
 local n = 0
 local function fresh()
   n = n + 1
-  return base .. "/case" .. tostring(n) .. "/kanban.json"
+  return "/cases/" .. n .. "/kanban.json"
 end
 
-local function write_raw(path, text)
-  local dir = path:match("^(.*)/[^/]*$")
-  shell_ok("mkdir -p " .. quote(dir))
-  local f = assert(io.open(path, "wb"))
-  f:write(text)
-  f:close()
+local function persist(path, value)
+  files[path] = assert(maki.json.encode(value))
 end
 
 local function seed(s)
@@ -375,13 +129,13 @@ local function test_missing()
   local path = fresh()
   local s = Store.new(path)
   eq(#assert(s:list()), 0, "missing list is empty")
-  eq(read_file(path), nil, "list does not create missing store")
+  eq(files[path], nil, "list does not create missing store")
   for _, method in ipairs({ "get_many", "update_many", "delete_many" }) do
     local input = method == "update_many" and { ["task-1"] = { title = "A" } } or { "task-1" }
     local result, err = s[method](s, input)
     eq(result, nil, method .. " rejects missing task")
     eq(err, "task not found: task-1", method .. " missing error")
-    eq(read_file(path), nil, method .. " does not create file")
+    eq(files[path], nil, method .. " does not create file")
   end
   eq(assert(s:create_many({ { title = "first" } }))["task-1"].id, "task-1", "first mutation creates store")
   ok(s:delete_many({ "task-1" }), "delete last task")
@@ -443,16 +197,35 @@ local function test_success()
   eq(s:create_many({ { title = "restart" } })["task-1"].id, "task-1", "empty board reuses first id")
 end
 
+local function test_id_sorting()
+  for _, expected in ipairs({
+    { "task-2", "task-10", "", "alpha", "task-1x", "zeta" },
+    { "task-002", "task-02", "task-2", "task-010", "task-10" },
+  }) do
+    local path = fresh()
+    local tasks = {}
+    for _, id in ipairs(expected) do
+      tasks[id] = { title = "Task " .. id, status = "todo" }
+    end
+    persist(path, { tasks = tasks })
+    local list = assert(Store.new(path):list())
+    eq(#list, #expected, "sorting preserves arbitrary string IDs")
+    for i, id in ipairs(expected) do
+      eq(list[i].id, id, "IDs sort numerically before lexical IDs, with lexical numeric ties")
+    end
+  end
+end
+
 local function test_rejected()
   local path = fresh()
   local s = Store.new(path)
   seed(s)
-  local before = read_file(path)
+  local before = files[path]
   local function reject(method, input, message)
     local result, err = s[method](s, input)
     eq(result, nil, message)
     ok(type(err) == "string", message .. " has error")
-    eq(read_file(path), before, message .. " preserves bytes")
+    eq(files[path], before, message .. " preserves snapshot")
   end
   for _, method in ipairs({ "get_many", "create_many", "delete_many" }) do
     for _, input in ipairs({
@@ -509,6 +282,7 @@ local function test_rejected()
     { "X" },
     { title = "" },
     { title = false },
+    { title = " \t\n" },
     { description = 1 },
     { status = "bogus" },
     { status = false },
@@ -532,12 +306,27 @@ end
 local function test_malformed()
   local path = fresh()
   local s = Store.new(path)
-  for _, broken in ipairs({
-    "{ this is not json",
-    '{"tasks":{"task-1":{"title":"A"}}}',
-    '{"tasks":[{"title":"A","status":"todo"}]}',
-  }) do
-    write_raw(path, broken)
+  local broken_values = {
+    "not a store object",
+    {},
+    { tasks = false },
+    { tasks = { { title = "A", status = "todo" } } },
+    { tasks = { [2] = { title = "A", status = "todo" } } },
+    { tasks = { ["task-1"] = false } },
+    { tasks = { ["task-1"] = { status = "todo" } } },
+    { tasks = { ["task-1"] = { title = " \t\n", status = "todo" } } },
+    { tasks = { ["task-1"] = { title = false, status = "todo" } } },
+    { tasks = { ["task-1"] = { title = "A", description = false, status = "todo" } } },
+    { tasks = { ["task-1"] = { title = "A" } } },
+    { tasks = { ["task-1"] = { title = "A", status = "bogus" } } },
+    { tasks = { ["task-1"] = { title = "A", status = false } } },
+  }
+  local tokens = { "malformed raw token" }
+  for _, value in ipairs(broken_values) do
+    tokens[#tokens + 1] = assert(maki.json.encode(value))
+  end
+  for _, broken in ipairs(tokens) do
+    files[path] = broken
     for _, operation in ipairs({
       { "list" },
       { "get_many", { "task-1" } },
@@ -548,16 +337,64 @@ local function test_malformed()
       local result, err = s[operation[1]](s, operation[2])
       eq(result, nil, operation[1] .. " rejects malformed store")
       ok(err and err:find("invalid kanban store", 1, true), operation[1] .. " malformed error")
-      eq(read_file(path), broken, operation[1] .. " preserves malformed bytes")
+      eq(files[path], broken, operation[1] .. " preserves malformed snapshot")
     end
   end
+end
+
+local function test_read_failure()
+  local path = fresh()
+  local s = Store.new(path)
+  seed(s)
+  local before = files[path]
+  for _, boundary in ipairs({ "metadata", "read", "decode" }) do
+    errors[boundary] = "injected failure"
+    for _, operation in ipairs({
+      { "list" },
+      { "get_many", { "task-1" } },
+      { "create_many", { { title = "new" } } },
+      { "update_many", { ["task-1"] = { title = "changed" } } },
+      { "delete_many", { "task-1" } },
+    }) do
+      local result, err = s[operation[1]](s, operation[2])
+      eq(result, nil, operation[1] .. " rejects " .. boundary .. " failure")
+      local prefix = boundary == "decode" and "invalid kanban store: " or "could not read store: "
+      eq(err, prefix .. "injected failure", "read boundary error propagated")
+      eq(files[path], before, "read failure preserves snapshot")
+    end
+    errors[boundary] = nil
+  end
+  eq(s:create_many({ { title = "recovered" } })["task-4"].title, "recovered", "read failures consume no IDs")
+end
+
+local function test_detached_snapshots()
+  local value = { tasks = { ["task-1"] = { title = "original", status = "todo" } } }
+  local token = assert(maki.json.encode(value))
+  value.tasks["task-1"].title = "changed after encode"
+  local decoded = assert(maki.json.decode(token))
+  eq(decoded.tasks["task-1"].title, "original", "encode detaches snapshot")
+  decoded.tasks["task-1"].title = "changed after decode"
+  eq(maki.json.decode(token).tasks["task-1"].title, "original", "decode detaches snapshot")
+
+  local path = fresh()
+  local s = Store.new(path)
+  local inputs = { { title = "original" } }
+  local created = assert(s:create_many(inputs))
+  inputs[1].title, created["task-1"].title = "input mutation", "result mutation"
+  local updated = assert(s:update_many({ ["task-1"] = { status = "doing" } }))
+  updated["task-1"].status = "done"
+  local list = assert(s:list())
+  eq(list[1].title, "original", "create inputs and results detached")
+  eq(list[1].status, "doing", "update result detached")
+  list[1].title = "list mutation"
+  eq(s:get_many({ "task-1" })["task-1"].title, "original", "list result detached")
 end
 
 local function test_reload()
   local path = fresh()
   local s = Store.new(path)
   seed(s)
-  write_raw(path, '{"tasks":{"task-1":{"title":"external","description":"details","status":"doing"}}}')
+  persist(path, { tasks = { ["task-1"] = { title = "external", description = "details", status = "doing" } } })
   eq(s:get_many({ "task-1" })["task-1"].title, "external", "get reloads")
   eq(s:list()[1].status, "doing", "list reloads")
   eq(s:create_many({ { title = "new" }, { title = "new2" } })["task-3"].title, "new2", "create reads current IDs")
@@ -570,62 +407,47 @@ local function test_reload()
   eq(#s:list(), 2, "external replacement not overwritten")
 end
 
-local function test_allocation_counts()
-  local info = debug.getinfo(Store.create_many, "S")
-  local source = assert(read_file(info.source:sub(2)))
-  local computation_lines = {}
-  local line_number = 0
-  for line in (source .. "\n"):gmatch("([^\n]*)\n") do
-    line_number = line_number + 1
-    if
-      line_number >= info.linedefined
-      and line_number <= info.lastlinedefined
-      and line:find('"task-" .. candidate', 1, true)
-    then
-      computation_lines[line_number] = true
+local function test_allocation_scale()
+  local s = Store.new(fresh())
+  local inputs, holes = {}, {}
+  for i = 1, 1000 do
+    inputs[i] = { title = "existing " .. i }
+    if i % 2 == 1 then
+      holes[#holes + 1] = "task-" .. i
     end
   end
-  ok(next(computation_lines) ~= nil, "candidate computation lines found")
-  for _, sizes in ipairs({ { 0, 32 }, { 32, 1 }, { 32, 32 }, { 64, 64 } }) do
-    local prefix, batch = sizes[1], sizes[2]
-    local s = Store.new(fresh())
-    local inputs = {}
-    for i = 1, prefix do
-      inputs[i] = { title = "existing " .. i }
+  assert(s:create_many(inputs))
+  assert(s:delete_many(holes))
+  inputs = {}
+  for i = 1, 600 do
+    inputs[i] = { title = "new " .. i }
+  end
+  local created = assert(s:create_many(inputs))
+  for i = 1, 500 do
+    eq(created["task-" .. (2 * i - 1)].title, "new " .. i, "batch fills lowest free holes in order")
+  end
+  for i = 501, 600 do
+    eq(created["task-" .. (i + 500)].title, "new " .. i, "batch extends past occupied prefix")
+  end
+  local list = assert(s:list())
+  eq(#list, 1100, "large batch preserves total task count")
+  for i, task in ipairs(list) do
+    eq(task.id, "task-" .. i, "large board sorted numerically")
+    if i <= 1000 and i % 2 == 0 then
+      eq(task.title, "existing " .. i, "allocation preserves occupied IDs")
     end
-    if prefix > 0 then
-      assert(s:create_many(inputs))
-    end
-    inputs = {}
-    for i = 1, batch do
-      inputs[i] = { title = "new " .. i }
-    end
-    local computations = 0
-    local old_hook, old_mask, old_count = debug.gethook()
-    debug.sethook(function(_, line)
-      if computation_lines[line] and debug.getinfo(2, "f").func == Store.create_many then
-        computations = computations + 1
-      end
-    end, "l")
-    local succeeded, created = pcall(s.create_many, s, inputs)
-    debug.sethook(old_hook, old_mask, old_count)
-    assert(succeeded, created)
-    assert(created, "batch creation must succeed during allocation measurement")
-    eq(computations, prefix + batch, "candidate computations are prefix plus batch")
-    eq(created["task-" .. (prefix + 1)].title, "new 1", "allocation starts at lowest free ID")
-    eq(created["task-" .. (prefix + batch)].title, "new " .. batch, "allocation ends without collisions")
   end
 end
 
 local function test_normalization()
   local path = fresh()
   local s = Store.new(path)
-  write_raw(path, '{"tasks":{"task-2":{"id":"ignored","title":"external","status":"done"}}}')
+  persist(path, { tasks = { ["task-2"] = { id = "ignored", title = "external", status = "done" } } })
   eq(assert(s:get_many({ "task-2" }))["task-2"].description, "", "read normalizes missing description")
   local created = assert(s:create_many({ { title = "first hole" }, { title = "next hole" } }))
   eq(created["task-1"].title, "first hole", "reload fills first hole")
   eq(created["task-3"].title, "next hole", "reload skips occupied ID")
-  local persisted = assert(maki.json.decode(assert(read_file(path)))).tasks
+  local persisted = assert(maki.json.decode(files[path])).tasks
   eq(persisted["task-2"].description, "", "CRUD persists normalized description")
   eq(persisted["task-2"].id, nil, "CRUD strips stored body ID")
   eq(persisted["task-2"].status, "done", "CRUD preserves external status")
@@ -635,16 +457,6 @@ local function test_io_counts()
   local path = fresh()
   local s = Store.new(path)
   seed(s)
-  local old_read, old_write = maki.fs.read, maki.fs.atomic_write
-  local reads, writes = 0, 0
-  maki.fs.read = function(...)
-    reads = reads + 1
-    return old_read(...)
-  end
-  maki.fs.atomic_write = function(...)
-    writes = writes + 1
-    return old_write(...)
-  end
   local operations = {
     { "get_many", { "task-1", "task-2" }, 0 },
     { "create_many", { { title = "D" }, { title = "E" } }, 1 },
@@ -655,46 +467,37 @@ local function test_io_counts()
     { "get_many", { "task-1", "missing" }, 0 },
   }
   for _, operation in ipairs(operations) do
-    reads, writes = 0, 0
+    calls = {}
     local result = s[operation[1]](s, operation[2])
-    eq(reads, 1, operation[1] .. " reads once")
-    eq(writes, operation[3], operation[1] .. " atomic write count")
+    eq(calls.read, 1, operation[1] .. " reads once")
+    eq(calls.atomic_write or 0, operation[3], operation[1] .. " atomic write count")
     if operation[3] == 1 then
       ok(result, operation[1] .. " succeeds")
     end
   end
-  reads, writes = 0, 0
-  eq(s:create_many({ { title = "valid" }, {} }), nil, "invalid create fails before allocation")
-  eq(writes, 0, "invalid create does not write")
-  ok(reads <= 1, "invalid create reads at most once")
-  maki.fs.read, maki.fs.atomic_write = old_read, old_write
 end
 
 local function test_persistence_failure()
   local path = fresh()
   local s = Store.new(path)
   seed(s)
-  local before = read_file(path)
+  local before = files[path]
   for _, failure in ipairs({
-    { maki.json, "encode", "could not encode store: injected failure" },
-    { maki.fs, "mkdir", "could not create store directory: injected failure" },
-    { maki.fs, "atomic_write", "could not write store: injected failure" },
+    { "encode", "could not encode store: injected failure" },
+    { "mkdir", "could not create store directory: injected failure" },
+    { "atomic_write", "could not write store: injected failure" },
   }) do
     for _, operation in ipairs({
       { "create_many", { { title = "D" }, { title = "E" } } },
       { "update_many", { ["task-1"] = { title = "changed" }, ["task-2"] = { status = "done" } } },
       { "delete_many", { "task-1", "task-2" } },
     }) do
-      local owner, key = failure[1], failure[2]
-      local original = owner[key]
-      owner[key] = function()
-        return nil, "injected failure"
-      end
+      errors[failure[1]] = "injected failure"
       local result, err = s[operation[1]](s, operation[2])
-      owner[key] = original
+      errors[failure[1]] = nil
       eq(result, nil, operation[1] .. " persistence failure")
-      eq(err, failure[3], "persistence error propagated")
-      eq(read_file(path), before, "persistence failure preserves bytes")
+      eq(err, failure[2], "persistence error propagated")
+      eq(files[path], before, "persistence failure preserves snapshot")
     end
   end
   local recovered = assert(s:create_many({ { title = "D" }, { title = "E" } }))
@@ -732,16 +535,45 @@ local function test_tool_registration()
   eq(tasks.type, nil, "update preserves dynamic task IDs through host validation")
   eq(tasks.properties, nil, "update does not discard dynamic keys")
   ok(tasks.description:find("todo, doing, or done", 1, true) ~= nil, "update describes valid statuses")
+
+  local function output(name, input)
+    local result = registered[name].handler(input or {})
+    eq(result.is_error, nil, name .. " succeeds")
+    return assert(maki.json.decode(result.llm_output))
+  end
+  eq(#output("task_list"), 0, "empty tool list has no tasks")
+  local created = output("task_create", { tasks = { { title = "tool task" } } })
+  eq(created["task-1"].status, "todo", "create tool returns ID-keyed tasks")
+  eq(output("task_get", { ids = { "task-1" } })["task-1"].title, "tool task", "get tool output")
+  eq(output("task_list")[1].id, "task-1", "list tool returns task array")
+  eq(
+    output("task_update", { tasks = { ["task-1"] = { status = "done" } } })["task-1"].status,
+    "done",
+    "update tool output"
+  )
+  eq(output("task_delete", { ids = { "task-1" } })["task-1"].status, "done", "delete tool returns prior task")
+  eq(#output("task_list"), 0, "tool deletion leaves empty list")
+  local missing = registered.task_get.handler({ ids = { "task-1" } })
+  eq(missing.is_error, true, "tool marks business failures")
+  eq(missing.llm_output, "error: task not found: task-1", "tool reports business error")
+  errors.encode = "injected failure"
+  local failed = registered.task_list.handler({})
+  errors.encode = nil
+  eq(failed.is_error, true, "tool marks output encoding failure")
+  eq(failed.llm_output, "error: could not encode json: injected failure", "tool reports output encoding error")
 end
 
 local tests = {
   test_tool_registration,
   test_missing,
   test_success,
+  test_id_sorting,
   test_rejected,
   test_malformed,
+  test_read_failure,
+  test_detached_snapshots,
   test_reload,
-  test_allocation_counts,
+  test_allocation_scale,
   test_normalization,
   test_io_counts,
   test_persistence_failure,
@@ -754,8 +586,6 @@ for _, test in ipairs(tests) do
     print("ERROR: " .. tostring(err))
   end
 end
-
-shell_ok("rm -rf " .. quote(base))
 
 print(string.format("%d passed, %d failed", pass, fail))
 if fail > 0 then

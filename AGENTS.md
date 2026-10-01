@@ -10,12 +10,14 @@ maki-kanban is a Lua plugin for Maki 0.5.7+. Tasks represent project-level user 
 - `lua/kanban/tools.lua`: tool schemas and JSON/error responses.
 - `lua/kanban/ui.lua`: window lifecycle and event routing.
 - `lua/kanban/ui/board.lua`, `task.lua`: board selection/batch actions and detail/create field editing.
+- `lua/kanban/status.lua`: shared domain status order.
 - `lua/kanban/ui/board_view.lua`, `task_view.lua`: layout and rendering; Task description wrapping is cached by content and effective width.
+- `lua/kanban/ui/text.lua`: UTF-8-safe text and styled-input wrapping.
 - `lua/kanban/ui/display.lua`: shared display fitting, styles and help overlay.
 - `lua/kanban/ui/editor.lua`: temporary files and external editor lifecycle.
-- `tests/store.lua`: standalone Store/tool regression script with Maki API shims.
+- `tests/store.lua`: Store/tool business rules with detached in-memory snapshots, not a JSON or filesystem implementation.
 - `tests/ui.lua`, `tests/ui/`: isolated UI behavior groups and fresh host/Store fixtures.
-- `tests/plugin.rs`: real-host integration tests with disposable working directories.
+- `tests/plugin.rs`, `tests/support/mod.rs`: real JSON, filesystem, permissions and host contracts in disposable working directories.
 
 ## Change guardrails
 
@@ -39,6 +41,8 @@ lua tests/store.lua
 lua tests/ui.lua
 just lua-fmt-check
 just lua-lint
+cargo fmt --all -- --check
+cargo clippy --locked --tests -- -D warnings
 cargo test --locked
 ```
 

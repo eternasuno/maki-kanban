@@ -3,11 +3,10 @@ local Display = require("kanban.ui.display")
 local BoardView = {}
 local fit, styled = Display.fit, Display.styled
 
-local COLUMNS = {
-  { status = "todo", title = "TODO" },
-  { status = "doing", title = "DOING" },
-  { status = "done", title = "DONE" },
-}
+local COLUMNS = {}
+for i, status in ipairs(require("kanban.status")) do
+  COLUMNS[i] = { status = status, title = status:upper() }
+end
 local COLUMN_COLORS = {
   (maki.ui.theme_style("accent") or {}).fg,
   (maki.ui.theme_style("warning") or {}).fg,
@@ -44,7 +43,14 @@ function BoardView.layout(state)
   local footer_height = math.min(3, available)
   local gap = available >= 6 and 1 or 0
   local column_height = available - footer_height - gap
-  return horizontal, vertical, column_height, math.max(0, column_height - 2), gap, footer_height
+  return {
+    horizontal = horizontal,
+    vertical = vertical,
+    column_height = column_height,
+    viewport = math.max(0, column_height - 2),
+    gap = gap,
+    footer_height = footer_height,
+  }
 end
 
 local HELP = {
@@ -70,13 +76,13 @@ local HELP = {
 }
 
 function BoardView.render(state)
-  local horizontal, vertical, column_height, viewport, gap, footer_height = BoardView.layout(state)
-  local pane_width = state.width - 2 * horizontal
+  local layout = BoardView.layout(state)
+  local pane_width = state.width - 2 * layout.horizontal
   local lines = {}
   local foreground = maki.ui.theme_color("foreground")
   local function add_line(spans)
-    table.insert(spans, 1, styled(string.rep(" ", horizontal)))
-    spans[#spans + 1] = styled(string.rep(" ", horizontal))
+    table.insert(spans, 1, styled(string.rep(" ", layout.horizontal)))
+    spans[#spans + 1] = styled(string.rep(" ", layout.horizontal))
     lines[#lines + 1] = spans
   end
   local function blank()
@@ -85,10 +91,10 @@ function BoardView.render(state)
   local function border_color(i)
     return i == state.focused_column and COLUMN_COLORS[i] or foreground
   end
-  for _ = 1, vertical do
+  for _ = 1, layout.vertical do
     blank()
   end
-  if pane_width >= 3 and column_height >= 2 then
+  if pane_width >= 3 and layout.column_height >= 2 then
     local widths, visible = pane_widths(pane_width, state.focused_column)
     local header = {}
     for position, i in ipairs(visible) do
@@ -105,7 +111,7 @@ function BoardView.render(state)
       end
     end
     add_line(header)
-    for row = 1, viewport do
+    for row = 1, layout.viewport do
       local line = {}
       for position, i in ipairs(visible) do
         local width = widths[position]
@@ -138,11 +144,11 @@ function BoardView.render(state)
     end
     add_line(bottom)
   else
-    for _ = 1, column_height do
+    for _ = 1, layout.column_height do
       blank()
     end
   end
-  for _ = 1, gap do
+  for _ = 1, layout.gap do
     blank()
   end
   local message, color, bold = "NORMAL", foreground, false
@@ -157,8 +163,8 @@ function BoardView.render(state)
     local inner = math.max(0, pane_width - 4)
     message = message .. string.rep(" ", math.max(1, inner - #message - #hint)) .. hint
   end
-  for row = 1, footer_height do
-    if pane_width < 2 or footer_height == 1 then
+  for row = 1, layout.footer_height do
+    if pane_width < 2 or layout.footer_height == 1 then
       add_line({ styled(fit(message, pane_width), color, bold) })
     elseif row == 1 then
       add_line({ styled("┌" .. string.rep("─", pane_width - 2) .. "┐", foreground) })
@@ -172,7 +178,7 @@ function BoardView.render(state)
       })
     end
   end
-  for _ = 1, vertical do
+  for _ = 1, layout.vertical do
     blank()
   end
   if state.help_open and not state.pending_delete_ids then
@@ -180,7 +186,5 @@ function BoardView.render(state)
   end
   return lines
 end
-
-BoardView.columns = COLUMNS
 
 return BoardView
