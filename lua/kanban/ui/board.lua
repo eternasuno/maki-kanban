@@ -19,7 +19,9 @@ local function styled(text, color, background, bold)
 end
 
 local function fit(text, width)
-  if width <= 0 then return "" end
+  if width <= 0 then
+    return ""
+  end
   if maki.ui.display_width(text) > width then
     text = maki.ui.truncate_text(text, width).head
   end
@@ -30,7 +32,9 @@ local function make_cards(tasks)
   local cards = { todo = {}, doing = {}, done = {} }
   for _, task in ipairs(tasks) do
     local bucket = cards[task.status]
-    if bucket then bucket[#bucket + 1] = task end
+    if bucket then
+      bucket[#bucket + 1] = task
+    end
   end
   return cards
 end
@@ -42,17 +46,23 @@ local function padding(state)
 end
 
 local function pane_widths(width, focused)
-  if width < 60 then return { width }, { focused } end
+  if width < 60 then
+    return { width }, { focused }
+  end
   local usable = width - 2
   local base, extra = math.floor(usable / 3), usable % 3
   local widths = {}
-  for i = 1, 3 do widths[i] = base + (i <= extra and 1 or 0) end
+  for i = 1, 3 do
+    widths[i] = base + (i <= extra and 1 or 0)
+  end
   return widths, { 1, 2, 3 }
 end
 
 local function layout(state)
   local horizontal, vertical = padding(state)
-  if state.height < 8 then vertical = 0 end
+  if state.height < 8 then
+    vertical = 0
+  end
   local available = state.height - 2 * vertical
   local footer_height = math.min(3, available)
   local gap = available >= 6 and 1 or 0
@@ -80,7 +90,9 @@ end
 
 local function slice_line(line, start, length)
   local result, position = {}, 0
-  if type(line) == "string" then line = { styled(line) } end
+  if type(line) == "string" then
+    line = { styled(line) }
+  end
   for _, span in ipairs(line) do
     local text, style = span[1], span[2]
     local width = maki.ui.display_width(text)
@@ -124,10 +136,13 @@ local HELP = {
 }
 
 function Board.help_overlay(state, lines, help)
-  if state.width <= 0 or state.height <= 0 then return end
+  if state.width <= 0 or state.height <= 0 then
+    return
+  end
   local width, height = math.min(36, state.width), math.min(#help + 2, state.height)
   if width < 2 or height < 2 then
-    lines[math.floor((state.height + 1) / 2)] = { styled(fit("? Help: ? / Esc close", state.width), (maki.ui.theme_style("accent") or {}).fg) }
+    lines[math.floor((state.height + 1) / 2)] =
+      { styled(fit("? Help: ? / Esc close", state.width), (maki.ui.theme_style("accent") or {}).fg) }
     return
   end
   local x, y = math.floor((state.width - width) / 2), math.floor((state.height - height) / 2)
@@ -144,7 +159,9 @@ function Board.help_overlay(state, lines, help)
     end
     local line = slice_line(lines[y + row], 0, x)
     line[#line + 1] = styled(text, row == 1 and (maki.ui.theme_style("accent") or {}).fg or color)
-    for _, span in ipairs(slice_line(lines[y + row], x + width, state.width - x - width)) do line[#line + 1] = span end
+    for _, span in ipairs(slice_line(lines[y + row], x + width, state.width - x - width)) do
+      line[#line + 1] = span
+    end
     lines[y + row] = line
   end
 end
@@ -159,9 +176,15 @@ local function board_lines(state)
     spans[#spans + 1] = styled(string.rep(" ", horizontal))
     lines[#lines + 1] = spans
   end
-  local function blank() lines[#lines + 1] = string.rep(" ", state.width) end
-  local function border_color(i) return i == state.focused_column and COLUMN_COLORS[i] or foreground end
-  for _ = 1, vertical do blank() end
+  local function blank()
+    lines[#lines + 1] = string.rep(" ", state.width)
+  end
+  local function border_color(i)
+    return i == state.focused_column and COLUMN_COLORS[i] or foreground
+  end
+  for _ = 1, vertical do
+    blank()
+  end
   if pane_width >= 3 and column_height >= 2 then
     local widths, visible = pane_widths(pane_width, state.focused_column)
     local header = {}
@@ -169,8 +192,15 @@ local function board_lines(state)
       local column = COLUMNS[i]
       local title = "─ " .. column.title .. " · " .. #state.cards[column.status] .. " "
       local heading = maki.ui.truncate_text(title, widths[position] - 2).head
-      header[#header + 1] = styled("┌" .. heading .. string.rep("─", widths[position] - 2 - maki.ui.display_width(heading)) .. "┐", COLUMN_COLORS[i], nil, i == state.focused_column)
-      if position < #visible then header[#header + 1] = styled(" ") end
+      header[#header + 1] = styled(
+        "┌" .. heading .. string.rep("─", widths[position] - 2 - maki.ui.display_width(heading)) .. "┐",
+        COLUMN_COLORS[i],
+        nil,
+        i == state.focused_column
+      )
+      if position < #visible then
+        header[#header + 1] = styled(" ")
+      end
     end
     add_line(header)
     local marker_width = maki.ui.display_width("▸ ")
@@ -185,22 +215,40 @@ local function board_lines(state)
         local marker = selected and "▸ " or "  "
         local content = marker .. (task and task.title or "")
         line[#line + 1] = styled("│", border_color(i), nil, i == state.focused_column)
-        line[#line + 1] = styled(fit(content, width - 2), (selected or marked) and COLUMN_COLORS[i] or foreground, nil, selected or marked or false)
+        line[#line + 1] = styled(
+          fit(content, width - 2),
+          (selected or marked) and COLUMN_COLORS[i] or foreground,
+          nil,
+          selected or marked or false
+        )
         line[#line + 1] = styled("│", border_color(i), nil, i == state.focused_column)
-        if position < #visible then line[#line + 1] = styled(" ") end
+        if position < #visible then
+          line[#line + 1] = styled(" ")
+        end
       end
       add_line(line)
     end
     local bottom = {}
     for position, i in ipairs(visible) do
-      bottom[#bottom + 1] = styled("└" .. string.rep("─", widths[position] - 2) .. "┘", border_color(i), nil, i == state.focused_column)
-      if position < #visible then bottom[#bottom + 1] = styled(" ") end
+      bottom[#bottom + 1] = styled(
+        "└" .. string.rep("─", widths[position] - 2) .. "┘",
+        border_color(i),
+        nil,
+        i == state.focused_column
+      )
+      if position < #visible then
+        bottom[#bottom + 1] = styled(" ")
+      end
     end
     add_line(bottom)
   else
-    for _ = 1, column_height do blank() end
+    for _ = 1, column_height do
+      blank()
+    end
   end
-  for _ = 1, gap do blank() end
+  for _ = 1, gap do
+    blank()
+  end
   local message, color, bold = "NORMAL", foreground, false
   if state.pending_delete_ids then
     message = "Delete " .. #state.pending_delete_ids .. " task(s)?  y/N"
@@ -221,11 +269,19 @@ local function board_lines(state)
     elseif row == 3 then
       add_line({ styled("└" .. string.rep("─", pane_width - 2) .. "┘", foreground) })
     else
-      add_line({ styled("│", foreground), styled(fit(" " .. message, pane_width - 2), color, nil, bold), styled("│", foreground) })
+      add_line({
+        styled("│", foreground),
+        styled(fit(" " .. message, pane_width - 2), color, nil, bold),
+        styled("│", foreground),
+      })
     end
   end
-  for _ = 1, vertical do blank() end
-  if state.help_open and not state.pending_delete_ids then Board.help_overlay(state, lines, HELP) end
+  for _ = 1, vertical do
+    blank()
+  end
+  if state.help_open and not state.pending_delete_ids then
+    Board.help_overlay(state, lines, HELP)
+  end
   return lines
 end
 
@@ -237,9 +293,15 @@ end
 function Board.new(width, height)
   local self = setmetatable({}, Board)
   self._state = {
-    width = math.max(1, width), height = math.max(1, height), focused_column = 1,
-    offsets = { 0, 0, 0 }, selected = { 1, 1, 1 }, marked = {},
-    valid = true, tasks = {}, cards = { todo = {}, doing = {}, done = {} },
+    width = math.max(1, width),
+    height = math.max(1, height),
+    focused_column = 1,
+    offsets = { 0, 0, 0 },
+    selected = { 1, 1, 1 },
+    marked = {},
+    valid = true,
+    tasks = {},
+    cards = { todo = {}, doing = {}, done = {} },
   }
   refresh_lines(self._state)
   return self
@@ -261,13 +323,22 @@ function Board:reload(store)
     state.valid, state.error, state.tasks = true, nil, tasks
     local existing = {}
     for _, task in ipairs(tasks) do
-      if task.status == COLUMNS[state.focused_column].status then existing[task.id] = true end
+      if task.status == COLUMNS[state.focused_column].status then
+        existing[task.id] = true
+      end
     end
-    for id in pairs(state.marked) do if not existing[id] then state.marked[id] = nil end end
+    for id in pairs(state.marked) do
+      if not existing[id] then
+        state.marked[id] = nil
+      end
+    end
     state.cards = make_cards(tasks)
     for i, column in ipairs(COLUMNS) do
       for index, task in ipairs(state.cards[column.status]) do
-        if task.id == selected_ids[i] then state.selected[i] = index; break end
+        if task.id == selected_ids[i] then
+          state.selected[i] = index
+          break
+        end
       end
     end
   end
@@ -301,8 +372,13 @@ function Board:handle_key(key, store)
     return true
   end
   if state.help_open then
-    if key == "<C-c>" then return "quit" end
-    if key == "?" or key == "<Esc>" then state.help_open = false; refresh_lines(state) end
+    if key == "<C-c>" then
+      return "quit"
+    end
+    if key == "?" or key == "<Esc>" then
+      state.help_open = false
+      refresh_lines(state)
+    end
     return true
   end
   if key == "?" then
@@ -310,7 +386,11 @@ function Board:handle_key(key, store)
   elseif key == "<Space>" or key == " " then
     local task = state.valid and self:selected_task()
     if task then
-      if state.marked[task.id] then state.marked[task.id] = nil else state.marked[task.id] = true end
+      if state.marked[task.id] then
+        state.marked[task.id] = nil
+      else
+        state.marked[task.id] = true
+      end
     end
   elseif key == "g" or key == "G" then
     local i = state.focused_column
@@ -326,20 +406,30 @@ function Board:handle_key(key, store)
     local task = self:selected_task()
     local had_marks = next(state.marked) ~= nil
     local target = state.focused_column + (key == "<" and -1 or 1)
-    if #tasks == 0 or not COLUMNS[target] then return true end
+    if #tasks == 0 or not COLUMNS[target] then
+      return true
+    end
     local updates = {}
-    for _, item in ipairs(tasks) do updates[item.id] = { status = COLUMNS[target].status } end
+    for _, item in ipairs(tasks) do
+      updates[item.id] = { status = COLUMNS[target].status }
+    end
     local updated, err = store:update_many(updates)
     if not updated then
       state.error_message = tostring(err or "could not move task")
     else
       self:reload(store)
-      if task then self:select_task(task.id) end
+      if task then
+        self:select_task(task.id)
+      end
       if had_marks and state.valid and state.focused_column == target then
         local moved = {}
-        for _, item in ipairs(tasks) do moved[item.id] = true end
+        for _, item in ipairs(tasks) do
+          moved[item.id] = true
+        end
         for _, item in ipairs(state.cards[COLUMNS[target].status]) do
-          if moved[item.id] then state.marked[item.id] = true end
+          if moved[item.id] then
+            state.marked[item.id] = true
+          end
         end
       end
     end
@@ -350,9 +440,13 @@ function Board:handle_key(key, store)
     clamp_state(state)
   elseif key == "d" then
     local tasks = self:selected_tasks()
-    if #tasks == 0 then return true end
+    if #tasks == 0 then
+      return true
+    end
     local ids = {}
-    for _, task in ipairs(tasks) do ids[#ids + 1] = task.id end
+    for _, task in ipairs(tasks) do
+      ids[#ids + 1] = task.id
+    end
     state.pending_delete_ids = ids
   elseif key == "r" then
     self:reload(store)
@@ -369,7 +463,9 @@ function Board:select_task(id)
   for i, column in ipairs(COLUMNS) do
     for index, task in ipairs(state.cards[column.status]) do
       if task.id == id then
-        if i ~= state.focused_column then state.marked = {} end
+        if i ~= state.focused_column then
+          state.marked = {}
+        end
         state.focused_column, state.selected[i] = i, index
         refresh_lines(state)
         return true
@@ -388,7 +484,9 @@ end
 function Board:selected_tasks()
   local state = self._state
   local tasks = {}
-  if not state.valid then return tasks end
+  if not state.valid then
+    return tasks
+  end
   for index, task in ipairs(state.cards[COLUMNS[state.focused_column].status]) do
     if index == state.selected[state.focused_column] or state.marked[task.id] then
       tasks[#tasks + 1] = task

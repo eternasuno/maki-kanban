@@ -24,7 +24,7 @@ jobs:
       - name: Cache Nix store
         uses: nix-community/cache-nix-action@v7
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml', '.github/workflows/test.yml') }}
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('devenv.lock', 'devenv.nix', 'devenv.yaml', '.github/workflows/ci.yml', 'Cargo.lock') }}
           restore-prefixes-first-match: nix-${{ runner.os }}-
 
       - uses: cachix/cachix-action@v16
@@ -33,6 +33,13 @@ jobs:
 
       - name: Install devenv
         run: nix profile add nixpkgs#devenv
+
+      - name: Run Rust integration tests
+        shell: devenv shell -- bash -e {0}
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --tests -- -D warnings
+          cargo test --locked
 
       - name: Run Lua regression tests
         shell: devenv shell -- bash -e {0}

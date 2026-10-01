@@ -15,7 +15,9 @@ local function window_height(term)
 end
 
 function M.open()
-  if open_win then return end
+  if open_win then
+    return
+  end
   local term = maki.ui.terminal_size()
   local width, height = window_width(term), window_height(term)
   local buf = maki.ui.buf({ scratch = true })
@@ -23,14 +25,20 @@ function M.open()
   state.board:reload(store)
   buf:set_lines(state.board:render())
   local win = maki.ui.open_win(buf, {
-    width = "90%", height = "90%", border = "none", focus = true, cursor_line = false,
+    width = "90%",
+    height = "90%",
+    border = "none",
+    focus = true,
+    cursor_line = false,
   })
   open_win = win
 
   local ok, loop_err = pcall(function()
     while true do
       local ev = win:recv()
-      if not ev or ev.type == "close" then return end
+      if not ev or ev.type == "close" then
+        return
+      end
       if ev.type == "resize" then
         local new_term = maki.ui.terminal_size()
         local new_width = ev.width or window_width(new_term)
@@ -38,7 +46,9 @@ function M.open()
         if new_width ~= state.width or new_height ~= state.height then
           state.width, state.height = new_width, new_height
           state.board:resize(new_width, new_height)
-          if state.task then state.task:resize(new_width, new_height) end
+          if state.task then
+            state.task:resize(new_width, new_height)
+          end
           buf:set_lines(state.view == "board" and state.board:render() or state.task:render())
         end
       elseif ev.type == "paste" then
@@ -48,7 +58,9 @@ function M.open()
       elseif ev.type == "key" then
         if state.view == "board" then
           if state.board._state.pending_delete_ids or state.board._state.help_open then
-            if state.board:handle_key(ev.key, store) == "quit" then return end
+            if state.board:handle_key(ev.key, store) == "quit" then
+              return
+            end
             buf:set_lines(state.board:render())
           elseif ev.key == "q" or ev.key == "<Esc>" or ev.key == "<C-c>" then
             return
@@ -56,23 +68,36 @@ function M.open()
             local tasks = state.board:selected_tasks()
             if #tasks > 0 then
               local references = {}
-              for _, task in ipairs(tasks) do references[#references + 1] = "[task:" .. task.id .. "] " .. task.title end
+              for _, task in ipairs(tasks) do
+                references[#references + 1] = "[task:" .. task.id .. "] " .. task.title
+              end
               local reference = table.concat(references, "\n")
               win:close()
               open_win = nil
               local input, input_err = maki.ui.input()
               if not input then
-                maki.notify("Could not reference task in Maki input: " .. tostring(input_err or "input unavailable"), "error", { title = "Kanban" })
+                maki.notify(
+                  "Could not reference task in Maki input: " .. tostring(input_err or "input unavailable"),
+                  "error",
+                  { title = "Kanban" }
+                )
                 return
               end
               local separator = input.text ~= "" and not input.text:sub(1, input.cursor):match("\n$") and "\n" or ""
               local inserted, edit_err = maki.ui.input_edit({
-                start = input.cursor, stop = input.cursor, text = separator .. reference,
+                start = input.cursor,
+                stop = input.cursor,
+                text = separator .. reference,
                 cursor = input.cursor + #separator + #reference,
-                version = input.version, session_id = input.session_id,
+                version = input.version,
+                session_id = input.session_id,
               })
               if not inserted then
-                maki.notify("Could not reference task in Maki input: " .. tostring(edit_err or "input edit failed"), "error", { title = "Kanban" })
+                maki.notify(
+                  "Could not reference task in Maki input: " .. tostring(edit_err or "input edit failed"),
+                  "error",
+                  { title = "Kanban" }
+                )
               end
               return
             end
@@ -111,7 +136,9 @@ function M.open()
   end)
   win:close()
   open_win = nil
-  if not ok then error(loop_err) end
+  if not ok then
+    error(loop_err)
+  end
 end
 
 return M
