@@ -2,16 +2,18 @@ name: ci
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  tests:
+  ci:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -39,16 +41,12 @@ jobs:
         with:
           cmd-format: devenv shell -- {0}
 
-      - name: Run Rust integration tests
+      - name: Run checks
         shell: devenv shell -- bash -e {0}
         run: |
           cargo fmt --all -- --check
           cargo clippy --locked --tests -- -D warnings
           cargo test --locked
-
-      - name: Run Lua regression tests
-        shell: devenv shell -- bash -e {0}
-        run: |
           just lua-fmt-check
           just lua-lint
           just lua-test
