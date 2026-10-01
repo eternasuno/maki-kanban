@@ -2,8 +2,6 @@ local Store = require("kanban.store")
 
 local store = Store.new()
 
-local STATUSES = { "todo", "doing", "done" }
-
 local EMPTY_LIST = maki.json.decode("[]")
 
 local M = {}
@@ -66,7 +64,6 @@ end
 local ID = { type = "string", description = "Task id from task_list or task_create." }
 local TITLE = { type = "string", description = "Short task title." }
 local DESCRIPTION = { type = "string", description = "Longer task details." }
-local STATUS = { type = "string", enum = STATUSES, description = "Board column." }
 
 function M.register()
   maki.api.register_tool({
@@ -119,14 +116,9 @@ function M.register()
       type = "object",
       properties = {
         tasks = {
-          type = "object",
-          properties = {},
-          minProperties = 1,
-          additionalProperties = {
-            type = "object",
-            properties = { title = TITLE, description = DESCRIPTION, status = STATUS },
-            minProperties = 1,
-          },
+          description = "Non-empty object keyed by task ID. Each value is a non-empty patch with optional "
+            .. "title (nonblank string), description (string), and status (todo, doing, or done). "
+            .. 'For example: {"task-1": {"status": "doing"}}. Validated by the task store.',
         },
       },
       required = { "tasks" },

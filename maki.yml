@@ -1,0 +1,7 @@
+base: lua52
+lua_versions:
+  - luau
+globals:
+  maki:
+    any: true
+    property: full-write

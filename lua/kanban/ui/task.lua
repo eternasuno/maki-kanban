@@ -50,28 +50,38 @@ local function styled(text, color, bold, background)
 end
 
 local function fit(text, width)
-  if width <= 0 then return "" end
-  if maki.ui.display_width(text) > width then text = maki.ui.truncate_text(text, width).head end
+  if width <= 0 then
+    return ""
+  end
+  if maki.ui.display_width(text) > width then
+    text = maki.ui.truncate_text(text, width).head
+  end
   return text .. string.rep(" ", math.max(0, width - maki.ui.display_width(text)))
 end
 
 local function split_lines(text)
   local lines = {}
   text = tostring(text or "")
-  for line in (text .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = line end
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    lines[#lines + 1] = line
+  end
   return lines
 end
 
 local function wrap(text, width)
   local lines = {}
-  if width <= 0 then return lines end
+  if width <= 0 then
+    return lines
+  end
   for _, source in ipairs(split_lines(text)) do
     if source == "" then
       lines[#lines + 1] = ""
     else
       while maki.ui.display_width(source) > width do
         local part = maki.ui.truncate_text(source, width).head
-        if part == "" then break end
+        if part == "" then
+          break
+        end
         lines[#lines + 1] = part
         source = source:sub(#part + 1)
       end
@@ -107,7 +117,9 @@ function Task:resize(width, height)
   local inner = math.max(0, self.width - 2 - maki.ui.display_width("▸ "))
   local title_text = self.title_input and self.title_input:value() or self.task.title or ""
   local title = wrap(title_text, inner)
-  while #title < 2 do title[#title + 1] = "" end
+  while #title < 2 do
+    title[#title + 1] = ""
+  end
   if #title > 2 and inner > 0 then
     local head = maki.ui.truncate_text(title[2], math.max(0, inner - 1)).head
     title[2] = head .. "…"
@@ -115,14 +127,18 @@ function Task:resize(width, height)
   self.title_lines = { title[1], title[2] }
   self.status_color = status_color(self.creating and "todo" or self.task.status)
   self.description_lines = wrap(self.task.description or "", inner)
-  if #self.description_lines == 0 then self.description_lines = { "" } end
+  if #self.description_lines == 0 then
+    self.description_lines = { "" }
+  end
   self.offset = math.min(math.max(0, self.offset), math.max(0, #self.description_lines - self.viewport))
 end
 
 function Task:_begin(store)
   self.error = nil
   local field = self.focused_field
-  if field == "description" then return self:_edit_description(store) end
+  if field == "description" then
+    return self:_edit_description(store)
+  end
   self.editing = field
   if field == "title" then
     self.title_input = TextInput.new()
@@ -145,7 +161,11 @@ function Task:_save(store, field, value)
     return true
   end
   local updated, err
-  if store then updated, err = store:update_many({ [self.task.id] = { [field] = value } }) else err = "store unavailable" end
+  if store then
+    updated, err = store:update_many({ [self.task.id] = { [field] = value } })
+  else
+    err = "store unavailable"
+  end
   if not updated then
     self.error = tostring(err or "could not update task")
     self:resize(self.width, self.height)
@@ -160,17 +180,28 @@ function Task:_edit_description(store)
   local path
   if os and type(os.tmpname) == "function" then
     local ok, result = pcall(os.tmpname)
-    if ok then path = result end
+    if ok then
+      path = result
+    end
   end
   if not path then
     local dir = maki.env.state_dir()
     for _ = 1, 10 do
-      local candidate = maki.fs.joinpath(dir, string.format("kanban-description-%08x-%08x.md", math.random(0, 0x7fffffff), math.random(0, 0x7fffffff)))
+      local candidate = maki.fs.joinpath(
+        dir,
+        string.format("kanban-description-%08x-%08x.md", math.random(0, 0x7fffffff), math.random(0, 0x7fffffff))
+      )
       local meta, err = maki.fs.metadata(candidate)
-      if not meta and not err then path = candidate; break end
+      if not meta and not err then
+        path = candidate
+        break
+      end
     end
   end
-  if not path then self.error = "temporary file path unavailable"; return true end
+  if not path then
+    self.error = "temporary file path unavailable"
+    return true
+  end
   local original = tostring(self.task.description or "")
   local ok, err = maki.fs.write(path, original)
   if not ok then
@@ -214,7 +245,9 @@ end
 function Task:render()
   local lines = {}
   local width, height = self.width, self.height
-  if height <= 0 then return lines end
+  if height <= 0 then
+    return lines
+  end
   local inner = math.max(0, width - 2)
   local foreground = maki.ui.theme_color("foreground")
   local marker_width = maki.ui.display_width("▸ ")
@@ -228,14 +261,17 @@ function Task:render()
       lines[#lines + 1] = string.rep(" ", width)
     elseif row == 1 then
       local title = maki.ui.truncate_text(self.creating and "─ Create " or "─ Task ", inner).head
-      lines[#lines + 1] = { styled("┌" .. title .. string.rep("─", inner - maki.ui.display_width(title)) .. "┐", border) }
+      lines[#lines + 1] =
+        { styled("┌" .. title .. string.rep("─", inner - maki.ui.display_width(title)) .. "┐", border) }
     elseif row == self.pane_height then
       lines[#lines + 1] = { styled("└" .. string.rep("─", inner) .. "┘", border) }
     else
       local content_row = row - 1
       if content_row <= TITLE_HEIGHT then
         local content = self.title_lines[content_row] or ""
-        if self.creating and content_row == 1 and content == "" then content = "Title" end
+        if self.creating and content_row == 1 and content == "" then
+          content = "Title"
+        end
         lines[#lines + 1] = pane_line(content, self.focused_field == "title", content_row == 1)
       elseif content_row <= TITLE_HEIGHT + FIELD_GAP then
         lines[#lines + 1] = pane_line("", false, false)
@@ -247,7 +283,9 @@ function Task:render()
       end
     end
   end
-  for _ = 1, self.footer_gap do lines[#lines + 1] = string.rep(" ", width) end
+  for _ = 1, self.footer_gap do
+    lines[#lines + 1] = string.rep(" ", width)
+  end
   local message, hint, color, bold
   color, bold = foreground, false
   if self.confirm_delete then
@@ -264,7 +302,9 @@ function Task:render()
     message, hint = "NORMAL", "? help   Esc back   q quit"
   end
   if hint then
-    message = message .. string.rep(" ", math.max(1, inner - 2 - maki.ui.display_width(message) - maki.ui.display_width(hint))) .. hint
+    message = message
+      .. string.rep(" ", math.max(1, inner - 2 - maki.ui.display_width(message) - maki.ui.display_width(hint)))
+      .. hint
   end
   for row = 1, self.footer_height do
     if width < 2 or self.footer_height < FOOTER_HEIGHT then
@@ -274,7 +314,8 @@ function Task:render()
     elseif row == self.footer_height then
       lines[#lines + 1] = { styled("└" .. string.rep("─", inner) .. "┘", foreground) }
     else
-      lines[#lines + 1] = { styled("│", foreground), styled(fit(" " .. message, inner), color, bold), styled("│", foreground) }
+      lines[#lines + 1] =
+        { styled("│", foreground), styled(fit(" " .. message, inner), color, bold), styled("│", foreground) }
     end
   end
   if self.help_open and not self.confirm_delete then
@@ -296,27 +337,56 @@ end
 function Task:handle_key(key, store)
   if self.confirm_delete then
     self.confirm_delete = false
-    if key ~= "y" then return true end
+    if key ~= "y" then
+      return true
+    end
     local deleted, err
-    if store then deleted, err = store:delete_many({ self.task.id }) else err = "store unavailable" end
-    if not deleted then self.error = tostring(err or "could not delete task"); return true end
+    if store then
+      deleted, err = store:delete_many({ self.task.id })
+    else
+      err = "store unavailable"
+    end
+    if not deleted then
+      self.error = tostring(err or "could not delete task")
+      return true
+    end
     return "deleted"
   end
-  if key == "<C-c>" then return "quit" end
+  if key == "<C-c>" then
+    return "quit"
+  end
   if self.help_open then
-    if key == "?" or key == "<Esc>" then self.help_open = false end
+    if key == "?" or key == "<Esc>" then
+      self.help_open = false
+    end
     return true
   end
   if self.editing == "title" then
-    if key == "<Esc>" then self:_finish_edit(); return true end
-    if key == "<CR>" or key == "<Enter>" then return self:_save(store, "title", self.title_input:value()) end
+    if key == "<Esc>" then
+      self:_finish_edit()
+      return true
+    end
+    if key == "<CR>" or key == "<Enter>" then
+      return self:_save(store, "title", self.title_input:value())
+    end
     local result = self.title_input:handle_key(key)
-    if result ~= TextInput.Result.IGNORED then self.title_draft = self.title_input:value(); self:resize(self.width, self.height); return true end
+    if result ~= TextInput.Result.IGNORED then
+      self.title_draft = self.title_input:value()
+      self:resize(self.width, self.height)
+      return true
+    end
     return false
   end
-  if key == "q" then return "quit" end
-  if key == "<Esc>" then return "back" end
-  if key == "?" then self.help_open = true; return true end
+  if key == "q" then
+    return "quit"
+  end
+  if key == "<Esc>" then
+    return "back"
+  end
+  if key == "?" then
+    self.help_open = true
+    return true
+  end
   if key == "d" and not self.creating then
     self.confirm_delete, self.error = true, nil
     return true
@@ -324,7 +394,11 @@ function Task:handle_key(key, store)
   if key == "<Tab>" or key == "<S-Tab>" or key == "j" or key == "<Down>" or key == "k" or key == "<Up>" then
     local fields = self.creating and CREATE_FIELDS or FIELDS
     local current = 1
-    for i, field in ipairs(fields) do if field == self.focused_field then current = i end end
+    for i, field in ipairs(fields) do
+      if field == self.focused_field then
+        current = i
+      end
+    end
     local forward = key == "<Tab>" or key == "j" or key == "<Down>"
     local next_index = forward and current % #fields + 1 or (current - 2) % #fields + 1
     self.focused_field = fields[next_index]
@@ -333,8 +407,15 @@ function Task:handle_key(key, store)
     return self:_begin(store)
   elseif self.creating and key == "s" then
     local created, err
-    if store then created, err = store:create_many({ { title = self.task.title, description = self.task.description } }) else err = "store unavailable" end
-    if not created then self.error = tostring(err or "could not create task"); return true end
+    if store then
+      created, err = store:create_many({ { title = self.task.title, description = self.task.description } })
+    else
+      err = "store unavailable"
+    end
+    if not created then
+      self.error = tostring(err or "could not create task")
+      return true
+    end
     local _, task = next(created)
     self.task, self.creating, self.error = task, false, nil
     self.focused_field, self.offset = "title", 0
@@ -342,22 +423,38 @@ function Task:handle_key(key, store)
     return "created"
   elseif not self.creating and (key == "<" or key == ">") then
     local current = 1
-    for i, status in ipairs(STATUSES) do if status == self.task.status then current = i end end
+    for i, status in ipairs(STATUSES) do
+      if status == self.task.status then
+        current = i
+      end
+    end
     local target = current + (key == "<" and -1 or 1)
-    if not STATUSES[target] then return true end
+    if not STATUSES[target] then
+      return true
+    end
     return self:_save(store, "status", STATUSES[target])
   end
-  if self.creating then return false end
+  if self.creating then
+    return false
+  end
   local viewport = self.viewport
   local max_offset = math.max(0, #self.description_lines - viewport)
   local next_offset = self.offset
-  if key == "J" then next_offset = next_offset + 1
-  elseif key == "K" then next_offset = next_offset - 1
-  elseif key == "<PageDown>" then next_offset = next_offset + math.max(1, viewport)
-  elseif key == "<PageUp>" then next_offset = next_offset - math.max(1, viewport)
-  elseif key == "g" then next_offset = 0
-  elseif key == "G" then next_offset = max_offset
-  else return false end
+  if key == "J" then
+    next_offset = next_offset + 1
+  elseif key == "K" then
+    next_offset = next_offset - 1
+  elseif key == "<PageDown>" then
+    next_offset = next_offset + math.max(1, viewport)
+  elseif key == "<PageUp>" then
+    next_offset = next_offset - math.max(1, viewport)
+  elseif key == "g" then
+    next_offset = 0
+  elseif key == "G" then
+    next_offset = max_offset
+  else
+    return false
+  end
   self.offset = math.min(math.max(0, next_offset), max_offset)
   return true
 end

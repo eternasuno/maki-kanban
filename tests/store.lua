@@ -22,14 +22,26 @@ local function quote(s)
 end
 
 local function json_escape(s)
-  return (s:gsub('[%z\1-\31\\"]', function(c)
-    if c == '"' then return '\\"' end
-    if c == "\\" then return "\\\\" end
-    if c == "\n" then return "\\n" end
-    if c == "\r" then return "\\r" end
-    if c == "\t" then return "\\t" end
-    return string.format("\\u%04x", c:byte())
-  end))
+  return (
+    s:gsub('[%z\1-\31\\"]', function(c)
+      if c == '"' then
+        return '\\"'
+      end
+      if c == "\\" then
+        return "\\\\"
+      end
+      if c == "\n" then
+        return "\\n"
+      end
+      if c == "\r" then
+        return "\\r"
+      end
+      if c == "\t" then
+        return "\\t"
+      end
+      return string.format("\\u%04x", c:byte())
+    end)
+  )
 end
 
 local function array_len(t)
@@ -110,11 +122,16 @@ local function json_decode(text)
         return table.concat(out)
       elseif c == "\\" then
         local e = text:sub(pos + 1, pos + 1)
-        if e == "n" then out[#out + 1] = "\n"
-        elseif e == "t" then out[#out + 1] = "\t"
-        elseif e == "r" then out[#out + 1] = "\r"
-        elseif e == "b" then out[#out + 1] = "\b"
-        elseif e == "f" then out[#out + 1] = "\f"
+        if e == "n" then
+          out[#out + 1] = "\n"
+        elseif e == "t" then
+          out[#out + 1] = "\t"
+        elseif e == "r" then
+          out[#out + 1] = "\r"
+        elseif e == "b" then
+          out[#out + 1] = "\b"
+        elseif e == "f" then
+          out[#out + 1] = "\f"
         elseif e == "u" then
           out[#out + 1] = string.char(tonumber(text:sub(pos + 2, pos + 5), 16) % 256)
           pos = pos + 4
@@ -198,12 +215,27 @@ local function json_decode(text)
   parse_value = function()
     skip()
     local c = text:sub(pos, pos)
-    if c == "{" then return parse_object() end
-    if c == "[" then return parse_array() end
-    if c == '"' then return parse_string() end
-    if c == "t" and text:sub(pos, pos + 3) == "true" then pos = pos + 4; return true end
-    if c == "f" and text:sub(pos, pos + 4) == "false" then pos = pos + 5; return false end
-    if c == "n" and text:sub(pos, pos + 3) == "null" then pos = pos + 4; return nil end
+    if c == "{" then
+      return parse_object()
+    end
+    if c == "[" then
+      return parse_array()
+    end
+    if c == '"' then
+      return parse_string()
+    end
+    if c == "t" and text:sub(pos, pos + 3) == "true" then
+      pos = pos + 4
+      return true
+    end
+    if c == "f" and text:sub(pos, pos + 4) == "false" then
+      pos = pos + 5
+      return false
+    end
+    if c == "n" and text:sub(pos, pos + 3) == "null" then
+      pos = pos + 4
+      return nil
+    end
     return parse_number()
   end
 
@@ -394,10 +426,16 @@ local function test_success()
   eq(deleted["task-1"].status, "doing", "delete returns prior status")
   eq(deleted["task-3"].title, "C", "multi delete result")
   local fields = 0
-  for _ in pairs(deleted["task-1"]) do fields = fields + 1 end
+  for _ in pairs(deleted["task-1"]) do
+    fields = fields + 1
+  end
   eq(fields, 4, "delete public fields only")
   eq(#Store.new(path):list(), 2, "multi delete persisted")
-  eq(s:create_many({ { title = "replacement" }, { title = "replacement2" } })["task-3"].title, "replacement2", "create fills holes without collisions")
+  eq(
+    s:create_many({ { title = "replacement" }, { title = "replacement2" } })["task-3"].title,
+    "replacement2",
+    "create fills holes without collisions"
+  )
   eq(s:get_many({ "task-2" })["task-2"].description, "second", "collision preserves existing task")
   ok(s:delete_many({ "task-1" }), "single delete")
   ok(s:delete_many({ "task-2", "task-3", "task-4" }), "delete all remaining tasks")
@@ -417,7 +455,15 @@ local function test_rejected()
     eq(read_file(path), before, message .. " preserves bytes")
   end
   for _, method in ipairs({ "get_many", "create_many", "delete_many" }) do
-    for _, input in ipairs({ false, "nope", {}, { key = "task-1" }, { [2] = "task-1" }, { [1] = "task-1", [3] = "task-2" }, { "task-1", extra = true } }) do
+    for _, input in ipairs({
+      false,
+      "nope",
+      {},
+      { key = "task-1" },
+      { [2] = "task-1" },
+      { [1] = "task-1", [3] = "task-2" },
+      { "task-1", extra = true },
+    }) do
       reject(method, input, method .. " rejects non-array/empty/sparse/mixed input")
     end
     reject(method, nil, method .. " rejects nil")
@@ -428,21 +474,57 @@ local function test_rejected()
     end
   end
   for _, input in ipairs({
-    {}, { title = "" }, { title = "  " }, { title = false },
-    { title = "X", description = 5 }, { title = "X", status = "doing" },
-    { title = "X", status = false }, "nope", { "X" },
+    {},
+    { title = "" },
+    { title = "  " },
+    { title = false },
+    { title = "X", description = 5 },
+    { title = "X", status = "doing" },
+    { title = "X", status = false },
+    "nope",
+    { "X" },
     { title = "X", [2] = true },
   }) do
-    reject("create_many", { { title = "valid" }, input, { title = "also valid" } }, "invalid middle create rejects whole batch")
+    reject(
+      "create_many",
+      { { title = "valid" }, input, { title = "also valid" } },
+      "invalid middle create rejects whole batch"
+    )
   end
-  for _, input in ipairs({ false, "nope", {}, { { title = "X" } }, { [1] = { title = "X" }, ["task-1"] = { title = "X" } } }) do
+  for _, input in ipairs({
+    false,
+    "nope",
+    {},
+    { { title = "X" } },
+    { [1] = { title = "X" }, ["task-1"] = { title = "X" } },
+  }) do
     reject("update_many", input, "update rejects non-object/empty/non-string key")
   end
   reject("update_many", nil, "update rejects nil")
-  for _, patch in ipairs({ {}, false, "nope", { "X" }, { title = "" }, { title = false }, { description = 1 }, { status = "bogus" }, { status = false }, { unknown = true }, { title = "valid", id = "task-2" } }) do
-    reject("update_many", { ["task-1"] = { title = "changed" }, ["task-2"] = patch, ["task-3"] = { status = "done" } }, "invalid patch rejects whole batch")
+  for _, patch in ipairs({
+    {},
+    false,
+    "nope",
+    { "X" },
+    { title = "" },
+    { title = false },
+    { description = 1 },
+    { status = "bogus" },
+    { status = false },
+    { unknown = true },
+    { title = "valid", id = "task-2" },
+  }) do
+    reject(
+      "update_many",
+      { ["task-1"] = { title = "changed" }, ["task-2"] = patch, ["task-3"] = { status = "done" } },
+      "invalid patch rejects whole batch"
+    )
   end
-  reject("update_many", { ["task-1"] = { title = "changed" }, ["task-9"] = { status = "done" } }, "missing update rejects whole batch")
+  reject(
+    "update_many",
+    { ["task-1"] = { title = "changed" }, ["task-9"] = { status = "done" } },
+    "missing update rejects whole batch"
+  )
   eq(s:create_many({ { title = "next" } })["task-4"].id, "task-4", "rejected create consumes no IDs")
 end
 
@@ -456,7 +538,9 @@ local function test_malformed()
   }) do
     write_raw(path, broken)
     for _, operation in ipairs({
-      { "load" }, { "save" }, { "list" },
+      { "load" },
+      { "save" },
+      { "list" },
       { "get_many", { "task-1" } },
       { "create_many", { { title = "A" }, { title = "B" } } },
       { "update_many", { ["task-1"] = { title = "B" } } },
@@ -478,7 +562,11 @@ local function test_reload()
   eq(s:get_many({ "task-1" })["task-1"].title, "external", "get reloads")
   eq(s:list()[1].status, "doing", "list reloads")
   eq(s:create_many({ { title = "new" }, { title = "new2" } })["task-3"].title, "new2", "create reads current IDs")
-  eq(s:update_many({ ["task-1"] = { title = "updated" } })["task-1"].description, "details", "update preserves external fields")
+  eq(
+    s:update_many({ ["task-1"] = { title = "updated" } })["task-1"].description,
+    "details",
+    "update preserves external fields"
+  )
   eq(s:delete_many({ "task-1" })["task-1"].status, "doing", "delete returns latest fields")
   eq(#s:list(), 2, "external replacement not overwritten")
 end
@@ -511,7 +599,9 @@ local function test_io_counts()
     local result = s[operation[1]](s, operation[2])
     eq(reads, 1, operation[1] .. " reads once")
     eq(writes, operation[3], operation[1] .. " atomic write count")
-    if operation[3] == 1 then ok(result, operation[1] .. " succeeds") end
+    if operation[3] == 1 then
+      ok(result, operation[1] .. " succeeds")
+    end
   end
   reads, writes = 0, 0
   eq(s:create_many({ { title = "valid" }, {} }), nil, "invalid create fails before allocation")
@@ -537,7 +627,9 @@ local function test_persistence_failure()
     }) do
       local owner, key = failure[1], failure[2]
       local original = owner[key]
-      owner[key] = function() return nil, "injected failure" end
+      owner[key] = function()
+        return nil, "injected failure"
+      end
       local result, err = s[operation[1]](s, operation[2])
       owner[key] = original
       eq(result, nil, operation[1] .. " persistence failure")
@@ -574,9 +666,9 @@ local function test_tool_registration()
     ok(registered[name] ~= nil, name .. " registers")
   end
   local tasks = registered.task_update.schema.properties.tasks
-  eq(tasks.minProperties, 1, "update requires at least one task")
-  eq(tasks.additionalProperties.minProperties, 1, "update requires non-empty patches")
-  ok(tasks.additionalProperties.properties.status ~= nil, "update accepts status patches")
+  eq(tasks.type, nil, "update preserves dynamic task IDs through host validation")
+  eq(tasks.properties, nil, "update does not discard dynamic keys")
+  ok(tasks.description:find("todo, doing, or done", 1, true) ~= nil, "update describes valid statuses")
 end
 
 local tests = {

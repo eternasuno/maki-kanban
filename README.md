@@ -77,13 +77,17 @@ A missing file means an empty board; the first mutation creates it. Invalid JSON
 
 ## Development
 
-Run regression tests from the repository root:
+Enter the development environment with `devenv shell` (or direnv), then run tests from the repository root:
 
 ```sh
-lua tests/store.lua
-lua tests/ui.lua
+just check
+just lint
+just test
+just lua-test
 ```
 
-The scripts use local Maki API shims. For real-host checks, start Maki in a disposable project directory, verify tool registration with `maki prompt --tools --names`, and exercise `/kanban`, editing, batch actions and resizing. Use interactive `/reload` after Lua changes and `maki --no-jit` for clearer Lua stack traces.
+The Rust integration tests follow `lu-zero/maki-lua-plugin-template`'s test-only Cargo package pattern, loading the plugin through the real Maki `PluginHost` with `PluginPermissions::trusted()`. A separate test grants only the permissions declared in `plugin.toml`. The three Maki dev-dependencies follow the upstream default branch without a `rev` in `Cargo.toml`; `Cargo.lock` records the exact revision tested. Use `cargo update -p maki-lua` to update the shared Maki source, then run the integration suite. CI uses `--locked` for reproducible verification. They cover registration, real filesystem/JSON behavior, batch validation, tool dispatch and window lifecycle. Each test runs in a subprocess with a disposable working directory so the project's `.maki/kanban.json` is never accessed. Rust 1.88 or newer and native build tools are required; the devenv environment supplies Rust and Lua.
+
+The Lua scripts use local Maki API shims. Host integration tests observe UI channels, not terminal rendering. For real-host checks, start Maki in a disposable project directory, verify tool registration with `maki prompt --tools --names`, and exercise `/kanban`, editing, batch actions and resizing. Use interactive `/reload` after Lua changes and `maki --no-jit` for clearer Lua stack traces.
 
 See `AGENTS.md` for project structure and change guardrails.
