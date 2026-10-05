@@ -1,6 +1,10 @@
 use std::{path::Path, process::Command, sync::Arc, time::Duration};
 
-use maki_agent::{AgentMode, ToolOutput, tools::ToolRegistry};
+use maki_agent::{
+    AgentMode, ToolOutput,
+    agent::tool_dispatch,
+    tools::{CallOrigin, ToolContext, ToolRegistry},
+};
 use maki_lua::{PluginHost, PluginPermissions};
 use serde_json::Value;
 
@@ -71,6 +75,17 @@ pub(super) fn with_store(host: &PluginHost, source: &str) {
     );
 }
 
+pub(super) fn dispatch_tool(context: &ToolContext, name: &str, input: &Value) -> String {
+    let done = smol::block_on(tool_dispatch::run(
+        String::new(),
+        name,
+        input,
+        context,
+        CallOrigin::Model,
+    ));
+    done.output.as_text()
+}
+
 pub(super) fn exec_tool(
     registry: &ToolRegistry,
     name: &str,
@@ -96,4 +111,11 @@ pub(super) fn tool_json(registry: &ToolRegistry, name: &str, input: Value) -> Va
 
 pub(super) fn persisted() -> Vec<u8> {
     std::fs::read(".maki/kanban.json").unwrap()
+}
+
+pub(super) fn store_path() -> String {
+    std::fs::canonicalize(".maki/kanban.json")
+        .unwrap_or_else(|_| std::env::current_dir().unwrap().join(".maki/kanban.json"))
+        .to_string_lossy()
+        .into_owned()
 }

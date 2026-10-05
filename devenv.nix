@@ -3,7 +3,11 @@
     just
     stylua
     selene
+    perl
   ];
-  languages.rust.enable = true;
+  languages.rust = {
+    enable = true;
+    channel = "stable";
+  };
   languages.lua.enable = true;
 }

@@ -37,9 +37,13 @@ function Text.wrap(text, width)
         local chunk = source:sub(start, last)
         local chunk_width = maki.ui.display_width(chunk)
         while last < #source and chunk_width <= width do
-          last = chunk_end(source, start, (last - start + 1) * 2)
-          chunk = source:sub(start, last)
-          chunk_width = maki.ui.display_width(chunk)
+          local next_last = chunk_end(source, start, (last - start + 1) * 2)
+          local next_chunk = source:sub(start, next_last)
+          local next_width = maki.ui.display_width(next_chunk)
+          last, chunk, chunk_width = next_last, next_chunk, next_width
+          if next_width > width then
+            break
+          end
         end
         if chunk_width <= width then
           lines[#lines + 1] = chunk

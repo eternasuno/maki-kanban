@@ -531,6 +531,18 @@ local function test_tool_registration()
   for _, name in ipairs({ "task_list", "task_get", "task_create", "task_update", "task_delete" }) do
     ok(registered[name] ~= nil, name .. " registers")
   end
+  for _, name in ipairs({ "task_list", "task_get" }) do
+    eq(registered[name].permission, "fs_read", name .. " declares read permission")
+    eq(registered[name].permission_scopes().scopes[1], Store.new().path, name .. " scopes project store")
+  end
+  for _, name in ipairs({ "task_create", "task_update", "task_delete" }) do
+    local spec = registered[name]
+    eq(spec.permission, "fs_write", name .. " declares write permission")
+    eq(spec.mutable_path, "path", name .. " declares write target")
+    eq(spec.permission_scopes, "path", name .. " authorizes write target")
+    ok(spec.handler({ path = "wrong-store" }).is_error, name .. " rejects mismatched target")
+    ok(spec.handler({}).is_error, name .. " rejects missing target")
+  end
   local tasks = registered.task_update.schema.properties.tasks
   eq(tasks.type, nil, "update preserves dynamic task IDs through host validation")
   eq(tasks.properties, nil, "update does not discard dynamic keys")
@@ -542,16 +554,20 @@ local function test_tool_registration()
     return assert(maki.json.decode(result.llm_output))
   end
   eq(#output("task_list"), 0, "empty tool list has no tasks")
-  local created = output("task_create", { tasks = { { title = "tool task" } } })
+  local created = output("task_create", { path = Store.new().path, tasks = { { title = "tool task" } } })
   eq(created["task-1"].status, "todo", "create tool returns ID-keyed tasks")
   eq(output("task_get", { ids = { "task-1" } })["task-1"].title, "tool task", "get tool output")
   eq(output("task_list")[1].id, "task-1", "list tool returns task array")
   eq(
-    output("task_update", { tasks = { ["task-1"] = { status = "done" } } })["task-1"].status,
+    output("task_update", { path = Store.new().path, tasks = { ["task-1"] = { status = "done" } } })["task-1"].status,
     "done",
     "update tool output"
   )
-  eq(output("task_delete", { ids = { "task-1" } })["task-1"].status, "done", "delete tool returns prior task")
+  eq(
+    output("task_delete", { path = Store.new().path, ids = { "task-1" } })["task-1"].status,
+    "done",
+    "delete tool returns prior task"
+  )
   eq(#output("task_list"), 0, "tool deletion leaves empty list")
   local missing = registered.task_get.handler({ ids = { "task-1" } })
   eq(missing.is_error, true, "tool marks business failures")
