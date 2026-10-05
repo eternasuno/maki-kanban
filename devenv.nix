@@ -3,7 +3,6 @@
     just
     stylua
     selene
-    perl
   ];
   languages.rust = {
     enable = true;
