@@ -1,4 +1,7 @@
-local STATUSES = { todo = true, doing = true, done = true }
+local STATUSES = {}
+for _, status in ipairs(require("kanban.status")) do
+  STATUSES[status] = true
+end
 
 local function is_status(value)
   return type(value) == "string" and STATUSES[value] == true
@@ -61,7 +64,13 @@ end
 local function by_id(a, b)
   local na, nb = id_number(a), id_number(b)
   if na and nb then
-    return na < nb
+    if na ~= nb then
+      return na < nb
+    end
+  elseif na then
+    return true
+  elseif nb then
+    return false
   end
   return a < b
 end
@@ -263,12 +272,14 @@ function Store:create_many(inputs)
   if not tasks then
     return nil, rerr
   end
-  local out, candidate = {}, 1
+  local out = {}
+  local candidate = 1
   for _, body in ipairs(bodies) do
-    while tasks["task-" .. candidate] ~= nil do
-      candidate = candidate + 1
-    end
     local id = "task-" .. candidate
+    while tasks[id] ~= nil do
+      candidate = candidate + 1
+      id = "task-" .. candidate
+    end
     tasks[id] = body
     out[id] = public(id, body)
     candidate = candidate + 1

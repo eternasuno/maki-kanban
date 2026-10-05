@@ -14,6 +14,122 @@ local function window_height(term)
   return math.max(1, math.floor(term.rows * 0.9))
 end
 
+local function handle_resize(state, buf, ev)
+  local term = maki.ui.terminal_size()
+  local width = ev.width or window_width(term)
+  local height = ev.height or window_height(term)
+  if width == state.width and height == state.height then
+    return
+  end
+  state.width, state.height = width, height
+  state.board:resize(width, height)
+  if state.task then
+    state.task:resize(width, height)
+  end
+  buf:set_lines(state.view == "board" and state.board:render() or state.task:render())
+end
+
+local function handle_reference(board, win)
+  local tasks = board:selected_tasks()
+  if #tasks == 0 then
+    return
+  end
+  local references = {}
+  for _, task in ipairs(tasks) do
+    references[#references + 1] = "[task:" .. task.id .. "] " .. task.title
+  end
+  local reference = table.concat(references, "\n")
+  win:close()
+  open_win = nil
+  local input, input_err = maki.ui.input()
+  if not input then
+    maki.notify(
+      "Could not reference task in Maki input: " .. tostring(input_err or "input unavailable"),
+      "error",
+      { title = "Kanban" }
+    )
+    return "quit"
+  end
+  local separator = input.text ~= "" and not input.text:sub(1, input.cursor):match("\n$") and "\n" or ""
+  local inserted, edit_err = maki.ui.input_edit({
+    start = input.cursor,
+    stop = input.cursor,
+    text = separator .. reference,
+    cursor = input.cursor + #separator + #reference,
+    version = input.version,
+    session_id = input.session_id,
+  })
+  if not inserted then
+    maki.notify(
+      "Could not reference task in Maki input: " .. tostring(edit_err or "input edit failed"),
+      "error",
+      { title = "Kanban" }
+    )
+  end
+  return "quit"
+end
+
+local function reload_board(state)
+  if state.board:reload(store, state.return_task_id) then
+    state.return_task_id = nil
+  end
+end
+
+local function handle_board_key(state, buf, win, key)
+  if state.board:is_modal() then
+    if state.board:handle_key(key, store) == "quit" then
+      return "quit"
+    end
+    buf:set_lines(state.board:render())
+  elseif key == "q" or key == "<Esc>" or key == "<C-c>" then
+    return "quit"
+  elseif key == "a" then
+    return handle_reference(state.board, win)
+  elseif key == "r" then
+    reload_board(state)
+    buf:set_lines(state.board:render())
+  elseif key == "n" then
+    local selected = state.board:selected_task()
+    state.return_task_id = selected and selected.id or state.return_task_id
+    state.task = Task.new_create(state.width, state.height)
+    state.view = "task"
+    buf:set_lines(state.task:render())
+  elseif key == "<CR>" or key == "<Enter>" then
+    local selected = state.board:selected_task()
+    if selected then
+      state.return_task_id = selected.id
+      state.task = Task.new(selected, state.width, state.height)
+      state.view = "task"
+      buf:set_lines(state.task:render())
+    end
+  elseif state.board:handle_key(key, store) then
+    buf:set_lines(state.board:render())
+  end
+end
+
+local function handle_task_key(state, buf, key)
+  local action = state.task:handle_key(key, store)
+  if action == "quit" then
+    return "quit"
+  elseif action == "deleted" or action == "back" then
+    reload_board(state)
+    state.view, state.task = "board", nil
+    buf:set_lines(state.board:render())
+  elseif action == "created" or action == "changed" then
+    state.return_task_id = state.task.task.id
+    buf:set_lines(state.task:render())
+  elseif action then
+    buf:set_lines(state.task:render())
+  end
+end
+
+local function handle_key(state, buf, win, key)
+  if state.view == "board" then
+    return handle_board_key(state, buf, win, key)
+  end
+  return handle_task_key(state, buf, key)
+end
+
 function M.open()
   if open_win then
     return
@@ -40,97 +156,13 @@ function M.open()
         return
       end
       if ev.type == "resize" then
-        local new_term = maki.ui.terminal_size()
-        local new_width = ev.width or window_width(new_term)
-        local new_height = ev.height or window_height(new_term)
-        if new_width ~= state.width or new_height ~= state.height then
-          state.width, state.height = new_width, new_height
-          state.board:resize(new_width, new_height)
-          if state.task then
-            state.task:resize(new_width, new_height)
-          end
-          buf:set_lines(state.view == "board" and state.board:render() or state.task:render())
-        end
+        handle_resize(state, buf, ev)
       elseif ev.type == "paste" then
         if state.view == "task" and state.task:handle_paste(ev.text) then
           buf:set_lines(state.task:render())
         end
-      elseif ev.type == "key" then
-        if state.view == "board" then
-          if state.board._state.pending_delete_ids or state.board._state.help_open then
-            if state.board:handle_key(ev.key, store) == "quit" then
-              return
-            end
-            buf:set_lines(state.board:render())
-          elseif ev.key == "q" or ev.key == "<Esc>" or ev.key == "<C-c>" then
-            return
-          elseif ev.key == "a" then
-            local tasks = state.board:selected_tasks()
-            if #tasks > 0 then
-              local references = {}
-              for _, task in ipairs(tasks) do
-                references[#references + 1] = "[task:" .. task.id .. "] " .. task.title
-              end
-              local reference = table.concat(references, "\n")
-              win:close()
-              open_win = nil
-              local input, input_err = maki.ui.input()
-              if not input then
-                maki.notify(
-                  "Could not reference task in Maki input: " .. tostring(input_err or "input unavailable"),
-                  "error",
-                  { title = "Kanban" }
-                )
-                return
-              end
-              local separator = input.text ~= "" and not input.text:sub(1, input.cursor):match("\n$") and "\n" or ""
-              local inserted, edit_err = maki.ui.input_edit({
-                start = input.cursor,
-                stop = input.cursor,
-                text = separator .. reference,
-                cursor = input.cursor + #separator + #reference,
-                version = input.version,
-                session_id = input.session_id,
-              })
-              if not inserted then
-                maki.notify(
-                  "Could not reference task in Maki input: " .. tostring(edit_err or "input edit failed"),
-                  "error",
-                  { title = "Kanban" }
-                )
-              end
-              return
-            end
-          elseif ev.key == "n" then
-            state.task = Task.new_create(state.width, state.height)
-            state.view = "task"
-            buf:set_lines(state.task:render())
-          elseif ev.key == "<CR>" or ev.key == "<Enter>" then
-            local selected = state.board:selected_task()
-            if selected then
-              state.task = Task.new(selected, state.width, state.height)
-              state.view = "task"
-              buf:set_lines(state.task:render())
-            end
-          elseif state.board:handle_key(ev.key, store) then
-            buf:set_lines(state.board:render())
-          end
-        else
-          local action = state.task:handle_key(ev.key, store)
-          if action == "quit" then
-            return
-          elseif action == "deleted" or action == "back" then
-            state.board:reload(store)
-            state.view, state.task = "board", nil
-            buf:set_lines(state.board:render())
-          elseif action == "created" or action == "changed" then
-            state.board:reload(store)
-            state.board:select_task(state.task.task.id)
-            buf:set_lines(state.task:render())
-          elseif action then
-            buf:set_lines(state.task:render())
-          end
-        end
+      elseif ev.type == "key" and handle_key(state, buf, win, ev.key) == "quit" then
+        return
       end
     end
   end)

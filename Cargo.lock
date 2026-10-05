@@ -2149,7 +2149,6 @@ version = "0.1.0"
 dependencies = [
  "maki-agent",
  "maki-lua",
- "maki-storage",
  "serde_json",
  "smol",
  "tempfile",

@@ -11,13 +11,13 @@ fmt:
     cargo fmt --all
 
 lua-fmt:
-    stylua --syntax luau --indent-type Spaces --indent-width 2 lua/ plugin/ tests/*.lua
+    stylua --syntax luau --indent-type Spaces --indent-width 2 lua/ plugin/ tests/
 
 lua-fmt-check:
-    stylua --check --syntax luau --indent-type Spaces --indent-width 2 lua/ plugin/ tests/*.lua
+    stylua --check --syntax luau --indent-type Spaces --indent-width 2 lua/ plugin/ tests/
 
 lua-lint:
-    selene lua/ plugin/ tests/*.lua
+    selene lua/ plugin/ tests/
 
 lua-test:
     lua tests/store.lua
