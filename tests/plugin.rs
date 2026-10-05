@@ -1,6 +1,10 @@
 use std::{path::Path, process::Command, sync::Arc, time::Duration};
 
-use maki_agent::{AgentMode, ToolOutput, tools::ToolRegistry};
+use maki_agent::{
+    AgentMode, ToolOutput,
+    agent::tool_dispatch,
+    tools::{CallOrigin, ToolContext, ToolRegistry},
+};
 use maki_lua::{PluginHost, PluginPermissions, UiAction, WinCommand, WinEvent};
 use serde_json::{Value, json};
 
@@ -67,6 +71,17 @@ fn with_store(host: &PluginHost, source: &str) {
             "local Store = require(\"kanban.store\")\nlocal path = {path}\nlocal store = Store.new(path)\n{source}"
         ),
     );
+}
+
+fn dispatch_tool(context: &ToolContext, name: &str, input: &Value) -> String {
+    let done = smol::block_on(tool_dispatch::run(
+        String::new(),
+        name,
+        input,
+        context,
+        CallOrigin::Model,
+    ));
+    done.output.as_text()
 }
 
 fn exec_tool(registry: &ToolRegistry, name: &str, input: Value) -> Result<String, String> {
@@ -166,18 +181,18 @@ fn store_batch_crud_defaults_id_reuse_and_reload() {
         assert(read["task-2"].title == "renamed" and read["task-1"].status == "doing")
         local deleted = assert(store:delete_many({ "task-1", "task-2" }))
         assert(deleted["task-1"].status == "doing" and deleted["task-2"].title == "renamed")
-        assert(next(assert(store:load()).tasks) == nil)
+        assert(#assert(store:list()) == 0)
         assert(assert(store:create_many({ { title = "reused" }, { title = "kept" } }))["task-1"].title == "reused")
         assert(store:delete_many({ "task-1" }))
         assert(assert(store:create_many({ { title = "lowest hole" } }))["task-1"].title == "lowest hole")
         assert(maki.fs.write(path, '{"tasks":{"task-10":{"title":"external","status":"done"},"task-2":{"title":"two","status":"todo"}}}'))
         local listed = assert(store:list())
         assert(#listed == 2 and listed[1].id == "task-2" and listed[2].id == "task-10")
-        assert(listed[2].description == "" and listed[2].status == "done")
+        assert(listed[1].description == "" and listed[2].description == "")
+        assert(listed[2].status == "done")
         assert(assert(store:get_many({ "task-10" }))["task-10"].title == "external")
-        assert(store:save())
         data = assert(maki.json.decode(assert(maki.fs.read(path))))
-        assert(data.tasks["task-10"].description == "" and data.tasks["task-10"].id == nil)
+        assert(data.tasks["task-10"].description == nil and data.tasks["task-10"].id == nil)
         "#,
     );
 }
@@ -237,7 +252,6 @@ fn store_corrupt_data_and_filesystem_write_failure_are_non_destructive() {
             function() return store:create_many({ { title = "new" } }) end,
             function() return store:update_many({ ["task-1"] = { status = "done" } }) end,
             function() return store:delete_many({ "task-1" }) end,
-            function() return store:save() end,
         }) do
             local value, err = operation()
             assert(value == nil and err:find("could not create store directory:", 1, true), tostring(err))
@@ -247,13 +261,11 @@ fn store_corrupt_data_and_filesystem_write_failure_are_non_destructive() {
         for _, corrupt in ipairs({ "{broken", "[]", '{"tasks":[{"title":"array","status":"todo"}]}', '{"tasks":{"task-1":{"title":"","status":"todo"}}}', '{"tasks":{"task-1":{"title":"bad","status":"unknown"}}}', '{"tasks":{"task-1":{"title":"bad","description":1,"status":"todo"}}}' }) do
             assert(maki.fs.write(path, corrupt))
             for _, operation in ipairs({
-                function() return store:load() end,
                 function() return store:list() end,
                 function() return store:get_many({ "task-1" }) end,
                 function() return store:create_many({ { title = "new" } }) end,
                 function() return store:update_many({ ["task-1"] = { title = "changed" } }) end,
                 function() return store:delete_many({ "task-1" }) end,
-                function() return store:save() end,
             }) do
                 local value, err = operation()
                 assert(value == nil and err:find("invalid kanban store:", 1, true), tostring(err))
@@ -280,10 +292,15 @@ fn default_store_and_registered_tools_return_json_and_errors() {
     );
     assert_eq!(exec_tool(&registry, "task_list", json!({})).unwrap(), "[]");
     assert!(!Path::new(".maki").exists());
+    let path = std::env::current_dir()
+        .unwrap()
+        .join(".maki/kanban.json")
+        .to_string_lossy()
+        .into_owned();
     let created = tool_json(
         &registry,
         "task_create",
-        json!({"tasks": [{"title": "first"}, {"title": "second", "description": "details"}]}),
+        json!({"path": path, "tasks": [{"title": "first"}, {"title": "second", "description": "details"}]}),
     );
     assert_eq!(
         created["task-1"],
@@ -297,7 +314,7 @@ fn default_store_and_registered_tools_return_json_and_errors() {
     let updated = tool_json(
         &registry,
         "task_update",
-        json!({"tasks": {"task-1": {"status": "doing"}, "task-2": {"title": "renamed"}}}),
+        json!({"path": path, "tasks": {"task-1": {"status": "doing"}, "task-2": {"title": "renamed"}}}),
     );
     assert_eq!(updated["task-1"]["title"], "first");
     assert_eq!(updated["task-1"]["status"], "doing");
@@ -306,47 +323,47 @@ fn default_store_and_registered_tools_return_json_and_errors() {
     for (name, input, expected) in [
         (
             "task_create",
-            json!({"tasks": [{"title": "valid"}, {"title": " "}]}),
+            json!({"path": path, "tasks": [{"title": "valid"}, {"title": " "}]}),
             "error: title must not be empty",
         ),
         (
             "task_get",
-            json!({"ids": ["task-1", "missing"]}),
+            json!({"path": path, "ids": ["task-1", "missing"]}),
             "error: task not found: missing",
         ),
         (
             "task_update",
-            json!({"tasks": {"task-1": {"title": "changed"}, "missing": {"title": "missing"}}}),
+            json!({"path": path, "tasks": {"task-1": {"title": "changed"}, "missing": {"title": "missing"}}}),
             "error: task not found: missing",
         ),
         (
             "task_delete",
-            json!({"ids": ["task-1", "missing"]}),
+            json!({"path": path, "ids": ["task-1", "missing"]}),
             "error: task not found: missing",
         ),
         (
             "task_update",
-            json!({"tasks": {}}),
+            json!({"path": path, "tasks": {}}),
             "error: updates must not be empty",
         ),
         (
             "task_update",
-            json!({"tasks": {"task-1": {}}}),
+            json!({"path": path, "tasks": {"task-1": {}}}),
             "error: no fields to update",
         ),
         (
             "task_update",
-            json!({"tasks": {"task-1": {"status": "invalid"}}}),
+            json!({"path": path, "tasks": {"task-1": {"status": "invalid"}}}),
             "error: invalid status: invalid",
         ),
         (
             "task_update",
-            json!({"tasks": {"task-1": {"unknown": true}}}),
+            json!({"path": path, "tasks": {"task-1": {"unknown": true}}}),
             "error: unknown update field: unknown",
         ),
         (
             "task_update",
-            json!({"tasks": "invalid"}),
+            json!({"path": path, "tasks": "invalid"}),
             "error: updates must be an object",
         ),
     ] {
@@ -361,7 +378,7 @@ fn default_store_and_registered_tools_return_json_and_errors() {
         tool_json(
             &registry,
             "task_delete",
-            json!({"ids": ["task-1", "task-2"]})
+            json!({"path": path, "ids": ["task-1", "task-2"]})
         ),
         updated
     );
@@ -370,7 +387,7 @@ fn default_store_and_registered_tools_return_json_and_errors() {
         tool_json(
             &registry,
             "task_create",
-            json!({"tasks": [{"title": "reused"}]})
+            json!({"path": path, "tasks": [{"title": "reused"}]})
         )["task-1"]["id"],
         "task-1"
     );
@@ -378,12 +395,15 @@ fn default_store_and_registered_tools_return_json_and_errors() {
     for (name, input) in [
         ("task_list", json!({})),
         ("task_get", json!({"ids": ["task-1"]})),
-        ("task_create", json!({"tasks": [{"title": "new"}]})),
+        (
+            "task_create",
+            json!({"path": path, "tasks": [{"title": "new"}]}),
+        ),
         (
             "task_update",
-            json!({"tasks": {"task-1": {"status": "done"}}}),
+            json!({"path": path, "tasks": {"task-1": {"status": "done"}}}),
         ),
-        ("task_delete", json!({"ids": ["task-1"]})),
+        ("task_delete", json!({"path": path, "ids": ["task-1"]})),
     ] {
         assert!(
             exec_tool(&registry, name, input)
@@ -447,23 +467,69 @@ fn declared_permissions_support_real_tool_crud() {
     if !in_disposable_project("declared_permissions_support_real_tool_crud") {
         return;
     }
+    let path = std::env::current_dir()
+        .unwrap()
+        .join(".maki/kanban.json")
+        .to_string_lossy()
+        .into_owned();
     assert_eq!(
         include_str!("../plugin.toml").trim(),
-        "min_maki_version = \"0.5.7\"\n\n[permissions]\nfs_read = true\nfs_write = true",
+        "min_maki_version = \"0.6.0\"\n\n[permissions]\nfs_read = true\nfs_write = true",
         "update test grants when the package manifest changes"
     );
-    let (registry, _host) =
+    let (registry, host) =
         plugin_host_with_permissions(PluginPermissions::from_approved(["fs_read", "fs_write"]));
+    run_lua(
+        &host,
+        r#"
+        local path = require("kanban.store").path
+        for _, name in ipairs({ "task_list", "task_get" }) do
+            local tool = assert(maki.api.get_tool(name))
+            assert(tool.name == name and tool.schema.type == "object")
+        end
+        for _, name in ipairs({ "task_create", "task_update", "task_delete" }) do
+            local tool = assert(maki.api.get_tool(name))
+            assert(tool.name == name and tool.schema.type == "object")
+        end
+        "#,
+    );
+    for (name, input) in [
+        ("task_list", json!({})),
+        ("task_get", json!({"ids": ["task-1"]})),
+        (
+            "task_create",
+            json!({"path": path, "tasks": [{"title": "scope"}]}),
+        ),
+        (
+            "task_update",
+            json!({"path": path, "tasks": {"task-1": {"status": "done"}}}),
+        ),
+        ("task_delete", json!({"path": path, "ids": ["task-1"]})),
+    ] {
+        let entry = registry.get(name).unwrap();
+        let expected_permission = if name == "task_list" || name == "task_get" {
+            maki_lua::Permission::FsRead
+        } else {
+            maki_lua::Permission::FsWrite
+        };
+        assert_eq!(entry.tool.required_permission(), Some(expected_permission));
+        let invocation = entry.tool.parse(&input).unwrap();
+        let scopes = smol::block_on(invocation.permission_scopes());
+        assert_eq!(scopes.unwrap().scopes, [path.as_str()]);
+        if name == "task_create" || name == "task_update" || name == "task_delete" {
+            assert_eq!(invocation.mutable_path(), Some(Path::new(&path)));
+        }
+    }
     let created = tool_json(
         &registry,
         "task_create",
-        json!({"tasks": [{"title": "permission check"}]}),
+        json!({"path": path, "tasks": [{"title": "permission check"}]}),
     );
     assert_eq!(created["task-1"]["status"], "todo");
     let updated = tool_json(
         &registry,
         "task_update",
-        json!({"tasks": {"task-1": {"status": "done"}}}),
+        json!({"path": path, "tasks": {"task-1": {"status": "done"}}}),
     );
     assert_eq!(updated["task-1"]["status"], "done");
     assert_eq!(
@@ -471,10 +537,76 @@ fn declared_permissions_support_real_tool_crud() {
         updated
     );
     assert_eq!(
-        tool_json(&registry, "task_delete", json!({"ids": ["task-1"]})),
+        tool_json(
+            &registry,
+            "task_delete",
+            json!({"path": path, "ids": ["task-1"]})
+        ),
         updated
     );
     assert_eq!(exec_tool(&registry, "task_list", json!({})).unwrap(), "[]");
+    let context = maki_agent::tools::test_support::stub_ctx(&AgentMode::Build);
+    let context = ToolContext {
+        registry: Arc::clone(&registry),
+        ..context
+    };
+    let write = dispatch_tool(
+        &context,
+        "task_create",
+        &json!({"path": path, "tasks": [{"title": "dispatcher"}]}),
+    );
+    let created: Value = serde_json::from_str(&write).unwrap();
+    assert_eq!(created["task-1"]["title"], "dispatcher");
+    let stored: Value = serde_json::from_slice(&persisted()).unwrap();
+    assert_eq!(stored["tasks"]["task-1"]["title"], "dispatcher");
+
+    let plan = AgentMode::Plan(Path::new("PLAN.md").to_path_buf());
+    let context = maki_agent::tools::test_support::stub_ctx(&plan);
+    let context = ToolContext {
+        registry: Arc::clone(&registry),
+        ..context
+    };
+    let before_blocked = persisted();
+    let blocked = dispatch_tool(
+        &context,
+        "task_update",
+        &json!({"path": path, "tasks": {"task-1": {"status": "done"}}}),
+    );
+    assert!(blocked.contains("write restricted to plan file"));
+    assert_eq!(persisted(), before_blocked);
+
+    let build = AgentMode::Build;
+    let context = maki_agent::tools::test_support::stub_ctx(&build);
+    let context = ToolContext {
+        registry: Arc::clone(&registry),
+        ..context
+    };
+    let wrong_path = std::env::current_dir()
+        .unwrap()
+        .join("other.json")
+        .to_string_lossy()
+        .into_owned();
+    let before_wrong_target = persisted();
+    let blocked = dispatch_tool(
+        &context,
+        "task_create",
+        &json!({"path": wrong_path, "tasks": [{"title": "blocked"}]}),
+    );
+    assert!(
+        serde_json::from_str::<Value>(&blocked).is_err(),
+        "{blocked}"
+    );
+    for (name, input) in [
+        ("task_create", json!({"tasks": [{"title": "missing path"}]})),
+        (
+            "task_update",
+            json!({"tasks": {"task-1": {"status": "done"}}}),
+        ),
+        ("task_delete", json!({"ids": ["task-1"]})),
+    ] {
+        assert!(registry.get(name).unwrap().tool.parse(&input).is_err());
+    }
+    assert_eq!(persisted(), before_wrong_target);
 }
 
 #[test]
@@ -543,7 +675,6 @@ fn store_atomic_write_failure_preserves_existing_json() {
                 function() return store:create_many({{ {{ title = "new" }} }}) end,
                 function() return store:update_many({{ ["task-1"] = {{ status = "done" }} }}) end,
                 function() return store:delete_many({{ "task-1" }}) end,
-                function() return store:save() end,
             }}) do
                 local value, err = operation()
                 assert(value == nil and err:find("could not write store:", 1, true), tostring(err))

@@ -54,14 +54,6 @@ local function public(id, body)
   }
 end
 
-local function next_id(tasks)
-  local n = 1
-  while tasks["task-" .. n] ~= nil do
-    n = n + 1
-  end
-  return "task-" .. n
-end
-
 local function id_number(id)
   return tonumber(id:match("^task%-(%d+)$"))
 end
@@ -110,11 +102,6 @@ local function read_tasks(path)
 end
 
 local function write_tasks(path, dir, tasks)
-  local verr = validate_data({ tasks = tasks })
-  if verr then
-    return nil, verr
-  end
-
   local encoded, eerr = maki.json.encode({ tasks = tasks })
   if not encoded then
     return nil, "could not encode store: " .. tostring(eerr)
@@ -150,22 +137,6 @@ function Store.new(path)
     path = path,
     dir = maki.fs.dirname(path),
   }, Store)
-end
-
-function Store:load()
-  local tasks, err = read_tasks(self.path)
-  if not tasks then
-    return nil, err
-  end
-  return { tasks = tasks }
-end
-
-function Store:save()
-  local tasks, err = read_tasks(self.path)
-  if not tasks then
-    return nil, err
-  end
-  return write_tasks(self.path, self.dir, tasks)
 end
 
 local function check_array(value, name)
@@ -292,11 +263,15 @@ function Store:create_many(inputs)
   if not tasks then
     return nil, rerr
   end
-  local out = {}
+  local out, candidate = {}, 1
   for _, body in ipairs(bodies) do
-    local id = next_id(tasks)
+    while tasks["task-" .. candidate] ~= nil do
+      candidate = candidate + 1
+    end
+    local id = "task-" .. candidate
     tasks[id] = body
     out[id] = public(id, body)
+    candidate = candidate + 1
   end
   local wok, werr = write_tasks(self.path, self.dir, tasks)
   if not wok then

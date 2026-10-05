@@ -5,6 +5,7 @@ package.path = root .. "/lua/?.lua;" .. package.path
 local TERM = { cols = 100, rows = 30 }
 local EVENTS, last_opts, last_buf, last_win = {}, nil, nil, nil
 local input_snapshot, input_edit_result, input_edit_error, notifications, input_edit_closed = nil, true, nil, {}, nil
+local input_edit_opts
 local function make_buf()
   local buf = { lines = {} }
   function buf:set_lines(lines)
@@ -56,11 +57,7 @@ local function width(text)
   while i <= #text do
     local b = text:byte(i)
     local bytes = b < 128 and 1 or b < 224 and 2 or b < 240 and 3 or 4
-    if b < 128 then
-      n = n + 1
-    elseif b < 224 then
-      n = n + 1
-    elseif b == 226 and (text:byte(i + 1) == 148 or text:sub(i, i + 2) == "▸") then
+    if b < 224 or (b == 226 and (text:byte(i + 1) == 148 or text:sub(i, i + 2) == "▸")) then
       n = n + 1
     else
       n = n + 2
@@ -176,11 +173,11 @@ _G.maki = {
 local text_input = {}
 text_input.Result = { IGNORED = "ignored", CHANGED = "changed" }
 function text_input.new()
-  local self = { chars = {}, cursor = 1 }
-  function self:value()
+  local input = { chars = {}, cursor = 1 }
+  function input:value()
     return table.concat(self.chars)
   end
-  function self:insert_text(value)
+  function input:insert_text(value)
     value = tostring(value or "")
     for char in value:gmatch(".[\128-\191]*") do
       table.insert(self.chars, self.cursor, char)
@@ -188,19 +185,21 @@ function text_input.new()
     end
     return text_input.Result.CHANGED
   end
-  function self:render(prefix, prefix_width, render_width)
+  function input:render(prefix, prefix_width, render_width)
     assert(prefix == "" and prefix_width == 0 and render_width == nil, "title render must not use codepoint wrapping")
     return {
-      lines = { {
-        { prefix, "dim" },
-        { table.concat(self.chars, "", 1, self.cursor - 1), "" },
-        { self.chars[self.cursor] or " ", "cursor" },
-        { table.concat(self.chars, "", self.cursor + 1), "" },
-      } },
+      lines = {
+        {
+          { prefix, "dim" },
+          { table.concat(self.chars, "", 1, self.cursor - 1), "" },
+          { self.chars[self.cursor] or " ", "cursor" },
+          { table.concat(self.chars, "", self.cursor + 1), "" },
+        },
+      },
       cursor_row = 1,
     }
   end
-  function self:handle_key(key)
+  function input:handle_key(key)
     if key == "<Left>" then
       self.cursor = math.max(1, self.cursor - 1)
       return text_input.Result.CHANGED
@@ -237,7 +236,7 @@ function text_input.new()
     end
     return text_input.Result.IGNORED
   end
-  return self
+  return input
 end
 package.loaded["maki.text_input"] = text_input
 
@@ -248,7 +247,7 @@ function fake:update_many(updates)
     return nil, self.update_error
   end
   local result = {}
-  for id, patch in pairs(updates) do
+  for _, patch in pairs(updates) do
     if patch.title ~= nil and patch.title == "" then
       return nil, "title must not be empty"
     end
@@ -1091,15 +1090,11 @@ for _, line in ipairs(cjk_lines) do
 end
 local done = Task.new({ title = "Finished task", status = "done", description = "" }, 12, 12)
 check(row(done:render(), 6) == "│" .. string.rep(" ", 10) .. "│", "empty description has no placeholder")
-local long = Task.new(
-  {
-    title = "Scrolling",
-    status = "todo",
-    description = table.concat({ "a", "b", "c", "d", "e", "f", "g", "h", "i", "j" }, "\n"),
-  },
-  12,
-  12
-)
+local long = Task.new({
+  title = "Scrolling",
+  status = "todo",
+  description = table.concat({ "a", "b", "c", "d", "e", "f", "g", "h", "i", "j" }, "\n"),
+}, 12, 12)
 check(
   long.viewport == 2 and row(long:render(), 6):find("a", 1, true),
   "description begins at top with height-minus-ten viewport"
@@ -1211,7 +1206,7 @@ check(
   edit:handle_key("<Left>", fake)
     and edit:handle_key("<BS>", fake)
     and edit:handle_paste("x\ny")
-    and edit.title_draft == "ax yc",
+    and edit.title_input:value() == "ax yc",
   "title cursor editing and newline paste"
 )
 check(edit:handle_key("<Esc>", fake) and edit.task.title == "abc" and not edit.editing, "title cancel discards draft")
@@ -1359,8 +1354,22 @@ maki.ui.open_editor = function(path)
   return 0
 end
 check(
-  edit:handle_key("<CR>", fake) and edit.error == "description failed" and #editor.removes == 1,
-  "description update failure is retained and cleaned up"
+  edit:handle_key("<CR>", fake)
+    and edit.error == "description failed"
+    and edit.description_draft == "failed update"
+    and #editor.removes == 1,
+  "description update failure retains draft and cleans temporary file"
+)
+fake.update_error = nil
+local retry_updates = #fake.updates
+reset_editor()
+editor.exit_code = 0
+check(
+  edit:handle_key("<CR>", fake) == "changed"
+    and edit.task.description == "failed update"
+    and #fake.updates == retry_updates + 1
+    and edit.description_draft == nil,
+  "description retry persists unchanged retained draft"
 )
 maki.ui.open_editor, fake.update_error = old_open_editor, nil
 
@@ -1371,7 +1380,7 @@ check(
   edit:handle_key("<CR>", fake) == true
     and edit.error == "write failed"
     and edit.task == editor_task
-    and edit.task.description == "updated",
+    and edit.task.description == "failed update",
   "description temporary write failure preserves task and reports error"
 )
 check(
@@ -1395,7 +1404,7 @@ check(
   edit:handle_key("<CR>", fake) == true
     and edit.error == nil
     and edit.task == editor_task
-    and edit.task.description == "updated"
+    and edit.task.description == "failed update"
     and #fake.updates == editor_updates,
   "successful unchanged description clears error without replacing task or updating Store"
 )
@@ -1757,16 +1766,31 @@ check(
 
 local cursor_create = Task.new_create(9, 12)
 cursor_create:handle_key("<CR>", fake)
-check(cursor(cursor_create).text == " " and not row(cursor_create:render(), 2):find("Title", 1, true), "empty create shows cursor without placeholder")
+check(
+  cursor(cursor_create).text == " " and not row(cursor_create:render(), 2):find("Title", 1, true),
+  "empty create shows cursor without placeholder"
+)
 cursor_create:handle_paste("abcdefghijklmnop")
-check(cursor(cursor_create).row == 3 and cursor_create.title_offset == 2, "long title follows end cursor across two rows")
-check(row(cursor_create:render(), 2):find("klmno", 1, true) and row(cursor_create:render(), 3):find("p ", 1, true), "long title viewport retains two styled content rows")
+check(
+  cursor(cursor_create).row == 3 and cursor_create.title_offset == 2,
+  "long title follows end cursor across two rows"
+)
+check(
+  row(cursor_create:render(), 2):find("klmno", 1, true) and row(cursor_create:render(), 3):find("p ", 1, true),
+  "long title viewport retains two styled content rows"
+)
 cursor_create:handle_key("<Home>", fake)
-check(cursor(cursor_create).row == 2 and cursor(cursor_create).text == "a" and cursor_create.title_offset == 0, "Home scrolls long title back to start")
+check(
+  cursor(cursor_create).row == 2 and cursor(cursor_create).text == "a" and cursor_create.title_offset == 0,
+  "Home scrolls long title back to start"
+)
 for _ = 1, 10 do
   cursor_create:handle_key("<Right>", fake)
 end
-check(cursor(cursor_create).row == 3 and cursor(cursor_create).text == "k" and cursor_create.title_offset == 1, "arrows scroll long title viewport")
+check(
+  cursor(cursor_create).row == 3 and cursor(cursor_create).text == "k" and cursor_create.title_offset == 1,
+  "arrows scroll long title viewport"
+)
 cursor_create:handle_key("<End>", fake)
 cursor_create:resize(9, 7)
 check(cursor(cursor_create).row == 2, "one visible title row still tracks cursor")
@@ -1778,7 +1802,19 @@ check(not cursor(cursor_create), "create title completion removes cursor")
 local resized_create = Task.new_create(80, 12)
 resized_create:handle_key("<CR>", fake)
 resized_create:handle_paste("中文创建标题中文创建标题")
-for _, size in ipairs({ { 20, 10 }, { 9, 12 }, { 6, 12 }, { 5, 12 }, { 4, 12 }, { 3, 12 }, { 2, 12 }, { 3, 4 }, { 1, 1 }, { 0, 0 }, { 80, 12 } }) do
+for _, size in ipairs({
+  { 20, 10 },
+  { 9, 12 },
+  { 6, 12 },
+  { 5, 12 },
+  { 4, 12 },
+  { 3, 12 },
+  { 2, 12 },
+  { 3, 4 },
+  { 1, 1 },
+  { 0, 0 },
+  { 80, 12 },
+}) do
   resized_create:resize(size[1], size[2])
   check(#resized_create:render() == size[2], "create resize respects height")
   for _, line in ipairs(resized_create:render()) do
@@ -2293,7 +2329,7 @@ fake.result.tasks["task-2"].status = "doing"
 board_delete:reload(fake)
 board_delete:select_task("task-2")
 for _, key in ipairs({ "n", "<Esc>", "q", "<CR>", "<Enter>", "j", "k", "l", "h", "2", "<", ">", "r", "d", "Y" }) do
-  local cards, selected, offsets =
+  local cards, selected_index, offsets =
     board_delete._state.cards, board_delete._state.selected[2], board_delete._state.offsets[2]
   board_delete:handle_key("d", fake)
   check(
@@ -2301,7 +2337,7 @@ for _, key in ipairs({ "n", "<Esc>", "q", "<CR>", "<Enter>", "j", "k", "l", "h",
       and not board_delete._state.pending_delete_ids
       and board_delete._state.cards == cards
       and board_delete._state.focused_column == 2
-      and board_delete._state.selected[2] == selected
+      and board_delete._state.selected[2] == selected_index
       and board_delete._state.offsets[2] == offsets
       and fake.deletes == board_deletes,
     "board confirmation consumes cancellation key " .. key
@@ -2464,38 +2500,38 @@ check(
 )
 local header_colors = { "#7799ff", "#ffaa00", "#00cc66" }
 local header_titles = { "TODO · 30", "DOING · 0", "DONE · 0" }
-for focused = 1, 3 do
+for focused_column = 1, 3 do
   local lines = phase:render()
   for column, color in ipairs(header_colors) do
     local span = lines[2][column * 2]
     check(
       span[1]:find(header_titles[column], 1, true)
         and span[2].fg == color
-        and span[2].bold == (column == focused)
+        and span[2].bold == (column == focused_column)
         and not span[2].bg,
-      "all headers retain status color and only focused header is bold: " .. focused .. "/" .. column
+      "all headers retain status color and only focused header is bold: " .. focused_column .. "/" .. column
     )
   end
-  if focused < 3 then
+  if focused_column < 3 then
     phase:handle_key("l", fake)
   end
 end
 phase:handle_key("h", fake)
 phase:handle_key("h", fake)
 phase:resize(20, 12)
-for focused, color in ipairs(header_colors) do
+for focused_column, color in ipairs(header_colors) do
   local lines = phase:render()
   check(
-    lines[2][2][1]:find(header_titles[focused], 1, true)
+    lines[2][2][1]:find(header_titles[focused_column], 1, true)
       and lines[2][2][2].fg == color
       and lines[2][2][2].bold
       and not lines[2][2][2].bg,
-    "narrow header uses focused status color: " .. focused
+    "narrow header uses focused status color: " .. focused_column
   )
   for _, line in ipairs(lines) do
     check(width(text(line)) <= 20, "status-colored narrow board respects width")
   end
-  if focused < 3 then
+  if focused_column < 3 then
     phase:handle_key("l", fake)
   end
 end
@@ -3174,6 +3210,33 @@ check(
 )
 maki.ui.open_editor = description_open
 reset_editor()
+
+local long_description = string.rep("中文abcd", 1000)
+local cached_task = Task.new({ title = "cache", description = long_description, status = "todo" }, 34, 20)
+local description_lines = cached_task.description_lines
+check(table.concat(description_lines) == long_description, "long description wrapping preserves text")
+for _, line in ipairs(description_lines) do
+  check(width(line) <= 30, "long description wrapping respects display width")
+end
+cached_task:_begin(fake)
+cached_task:handle_key("<Left>", fake)
+check(cached_task.description_lines == description_lines, "title editing reuses description wrapping")
+cached_task:resize(34, 10)
+check(cached_task.description_lines == description_lines, "height-only resize reuses description wrapping")
+cached_task:resize(24, 10)
+check(cached_task.description_lines ~= description_lines, "width change invalidates description wrapping")
+local narrower_lines = cached_task.description_lines
+cached_task.task.description = "changed"
+cached_task:resize(24, 10)
+check(
+  cached_task.description_lines ~= narrower_lines and cached_task.description_lines[1] == "changed",
+  "description change invalidates wrapping"
+)
+local same_text = Task.new({ title = "abcdefghijklmnop", description = "abcdefghijklmnop", status = "todo" }, 10, 20)
+check(
+  table.concat(same_text.description_lines) == same_text.task.description,
+  "title truncation does not mutate description wrapping"
+)
 
 print(string.format("%d passed, %d failed", passed, failed))
 if failed > 0 then

@@ -374,8 +374,6 @@ end
 local function test_missing()
   local path = fresh()
   local s = Store.new(path)
-  local board = assert(s:load())
-  eq(next(board.tasks), nil, "missing board is empty")
   eq(#s:list(), 0, "missing list is empty")
   for _, method in ipairs({ "get_many", "update_many", "delete_many" }) do
     local input = method == "update_many" and { ["task-1"] = { title = "A" } } or { "task-1" }
@@ -384,8 +382,6 @@ local function test_missing()
     eq(err, "task not found: task-1", method .. " missing error")
     eq(read_file(path), nil, method .. " does not create file")
   end
-  ok(s:save(), "save preserves missing-store behavior")
-  eq(#s:list(), 0, "save creates empty board")
 end
 
 local function test_success()
@@ -462,7 +458,7 @@ local function test_rejected()
       { key = "task-1" },
       { [2] = "task-1" },
       { [1] = "task-1", [3] = "task-2" },
-      { "task-1", extra = true },
+      { [1] = "task-1", extra = true },
     }) do
       reject(method, input, method .. " rejects non-array/empty/sparse/mixed input")
     end
@@ -538,8 +534,6 @@ local function test_malformed()
   }) do
     write_raw(path, broken)
     for _, operation in ipairs({
-      { "load" },
-      { "save" },
       { "list" },
       { "get_many", { "task-1" } },
       { "create_many", { { title = "A" }, { title = "B" } } },
@@ -664,6 +658,23 @@ local function test_tool_registration()
   require("kanban.tools").register()
   for _, name in ipairs({ "task_list", "task_get", "task_create", "task_update", "task_delete" }) do
     ok(registered[name] ~= nil, name .. " registers")
+  end
+  for _, name in ipairs({ "task_list", "task_get" }) do
+    local spec = registered[name]
+    eq(spec.permission, "fs_read", name .. " declares read permission")
+    eq(spec.permission_scopes().scopes[1], Store.new().path, name .. " scopes the project store")
+  end
+  for _, name in ipairs({ "task_create", "task_update", "task_delete" }) do
+    local spec = registered[name]
+    eq(spec.permission, "fs_write", name .. " declares write permission")
+    eq(spec.mutable_path, "path", name .. " declares write target")
+    eq(spec.permission_scopes, "path", name .. " authorizes write target")
+    local result = spec.handler({ path = "wrong-store" })
+    ok(
+      result.is_error and result.llm_output:find("write path must match", 1, true),
+      name .. " rejects mismatched target before store access"
+    )
+    ok(spec.handler({}).is_error, name .. " rejects missing target")
   end
   local tasks = registered.task_update.schema.properties.tasks
   eq(tasks.type, nil, "update preserves dynamic task IDs through host validation")

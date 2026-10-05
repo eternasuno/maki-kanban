@@ -203,7 +203,6 @@ local function board_lines(state)
       end
     end
     add_line(header)
-    local marker_width = maki.ui.display_width("▸ ")
     for row = 1, viewport do
       local line = {}
       for position, i in ipairs(visible) do
@@ -300,7 +299,6 @@ function Board.new(width, height)
     selected = { 1, 1, 1 },
     marked = {},
     valid = true,
-    tasks = {},
     cards = { todo = {}, doing = {}, done = {} },
   }
   refresh_lines(self._state)
@@ -317,10 +315,10 @@ function Board:reload(store)
   end
   local tasks, err = store:list()
   if not tasks then
-    state.valid, state.error, state.tasks = false, err, {}
+    state.valid, state.error = false, err
     state.cards, state.marked = { todo = {}, doing = {}, done = {} }, {}
   else
-    state.valid, state.error, state.tasks = true, nil, tasks
+    state.valid, state.error = true, nil
     local existing = {}
     for _, task in ipairs(tasks) do
       if task.status == COLUMNS[state.focused_column].status then
@@ -437,7 +435,6 @@ function Board:handle_key(key, store)
     local i = state.focused_column
     local count = #state.cards[COLUMNS[i].status]
     state.selected[i] = math.max(1, math.min(count, state.selected[i] + ((key == "j" or key == "<Down>") and 1 or -1)))
-    clamp_state(state)
   elseif key == "d" then
     local tasks = self:selected_tasks()
     if #tasks == 0 then

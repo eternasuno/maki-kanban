@@ -6,7 +6,6 @@ Task.__index = Task
 
 local FIELDS = { "title", "description" }
 local STATUSES = { "todo", "doing", "done" }
-local CREATE_FIELDS = { "title", "description" }
 local FOOTER_HEIGHT = 3
 local FOOTER_GAP = 1
 local PANE_BORDERS = 2
@@ -73,17 +72,21 @@ local function wrap(text, width)
   if width <= 0 then
     return lines
   end
+  text = tostring(text or "")
   for _, source in ipairs(split_lines(text)) do
     if source == "" then
       lines[#lines + 1] = ""
     else
-      while maki.ui.display_width(source) > width do
-        local part = maki.ui.truncate_text(source, width).head
-        if part == "" then
+      while true do
+        local part = maki.ui.truncate_text(source, width)
+        if part.tail == "" then
           break
         end
-        lines[#lines + 1] = part
-        source = source:sub(#part + 1)
+        if part.head == "" then
+          break
+        end
+        lines[#lines + 1] = part.head
+        source = part.tail
       end
       lines[#lines + 1] = source
     end
@@ -171,9 +174,13 @@ function Task:resize(width, height)
     self.title_lines = { title[1], title[2] }
   end
   self.status_color = status_color(self.creating and "todo" or self.task.status)
-  self.description_lines = wrap(self.task.description or "", inner)
-  if #self.description_lines == 0 then
-    self.description_lines = { "" }
+  local description = self.task.description or ""
+  if self.description_text ~= description or self.description_width ~= inner then
+    self.description_lines = wrap(description, inner)
+    if #self.description_lines == 0 then
+      self.description_lines = { "" }
+    end
+    self.description_text, self.description_width = description, inner
   end
   self.offset = math.min(math.max(0, self.offset), math.max(0, #self.description_lines - self.viewport))
 end
@@ -194,7 +201,7 @@ function Task:_begin(store)
 end
 
 function Task:_finish_edit()
-  self.editing, self.title_input, self.title_draft = nil, nil, nil
+  self.editing, self.title_input = nil, nil
   self.error = nil
   self:resize(self.width, self.height)
 end
@@ -248,7 +255,8 @@ function Task:_edit_description(store)
     return true
   end
   local original = tostring(self.task.description or "")
-  local ok, err = maki.fs.write(path, original)
+  local draft = self.description_draft or original
+  local ok, err = maki.fs.write(path, draft)
   if not ok then
     self.error = tostring(err or "could not write temporary file")
     maki.fs.rm(path)
@@ -260,7 +268,7 @@ function Task:_edit_description(store)
     local text, read_err = maki.fs.read(path)
     if not text then
       self.error = tostring(read_err or "could not read temporary file")
-    elseif text ~= original then
+    elseif text ~= draft or draft ~= original then
       local updated, update_err
       if self.creating then
         self.task.description = text
@@ -274,8 +282,10 @@ function Task:_edit_description(store)
       end
       if updated then
         self.task = updated
+        self.description_draft = nil
         changed = true
       else
+        self.description_draft = text
         self.error = tostring(update_err or "could not update task")
       end
     end
@@ -389,7 +399,6 @@ end
 function Task:handle_paste(text)
   if self.editing == "title" and self.title_input then
     self.title_input:insert_text(tostring(text or ""):gsub("%s*[\r\n]+%s*", " "))
-    self.title_draft = self.title_input:value()
     self:resize(self.width, self.height)
     return true
   end
@@ -433,7 +442,6 @@ function Task:handle_key(key, store)
     end
     local result = self.title_input:handle_key(key)
     if result ~= TextInput.Result.IGNORED then
-      self.title_draft = self.title_input:value()
       self:resize(self.width, self.height)
       return true
     end
@@ -454,7 +462,7 @@ function Task:handle_key(key, store)
     return true
   end
   if key == "<Tab>" or key == "<S-Tab>" or key == "j" or key == "<Down>" or key == "k" or key == "<Up>" then
-    local fields = self.creating and CREATE_FIELDS or FIELDS
+    local fields = FIELDS
     local current = 1
     for i, field in ipairs(fields) do
       if field == self.focused_field then
