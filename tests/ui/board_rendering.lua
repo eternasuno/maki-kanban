@@ -1,4 +1,19 @@
 --# selene: allow(undefined_variable, unscoped_variables)
+local view = require("kanban.ui.board_view")
+local theme_style = maki.ui.theme_style
+maki.ui.theme_style = function()
+  return {}
+end
+package.loaded["kanban.ui.board_view"] = nil
+local startup_view = require("kanban.ui.board_view")
+maki.ui.theme_style = theme_style
+package.loaded["kanban.ui.board_view"] = view
+local startup_board = Board.new(90, 12)
+local startup_lines = startup_view.render(startup_board._state)
+for column, color in ipairs({ "#7799ff", "#ffaa00", "#00cc66" }) do
+  check(startup_lines[2][column * 2][2].fg == color, "headers resolve theme colors after module initialization")
+end
+
 local regression_ids = {}
 for i = 1, 30 do
   regression_ids[i] = "task-" .. i

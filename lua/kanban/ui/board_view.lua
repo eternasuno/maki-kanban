@@ -7,11 +7,6 @@ local COLUMNS = {}
 for i, status in ipairs(require("kanban.status")) do
   COLUMNS[i] = { status = status, title = status:upper() }
 end
-local COLUMN_COLORS = {
-  (maki.ui.theme_style("accent") or {}).fg,
-  (maki.ui.theme_style("warning") or {}).fg,
-  (maki.ui.theme_style("success") or {}).fg,
-}
 local HORIZONTAL_PADDING = 2
 local VERTICAL_PADDING = 1
 
@@ -80,6 +75,11 @@ function BoardView.render(state)
   local pane_width = state.width - 2 * layout.horizontal
   local lines = {}
   local foreground = maki.ui.theme_color("foreground")
+  local column_colors = {
+    (maki.ui.theme_style("accent") or {}).fg,
+    (maki.ui.theme_style("warning") or {}).fg,
+    (maki.ui.theme_style("success") or {}).fg,
+  }
   local function add_line(spans)
     table.insert(spans, 1, styled(string.rep(" ", layout.horizontal)))
     spans[#spans + 1] = styled(string.rep(" ", layout.horizontal))
@@ -89,7 +89,7 @@ function BoardView.render(state)
     lines[#lines + 1] = string.rep(" ", state.width)
   end
   local function border_color(i)
-    return i == state.focused_column and COLUMN_COLORS[i] or foreground
+    return i == state.focused_column and column_colors[i] or foreground
   end
   for _ = 1, layout.vertical do
     blank()
@@ -103,7 +103,7 @@ function BoardView.render(state)
       local heading = maki.ui.truncate_text(title, widths[position] - 2).head
       header[#header + 1] = styled(
         "┌" .. heading .. string.rep("─", widths[position] - 2 - maki.ui.display_width(heading)) .. "┐",
-        COLUMN_COLORS[i],
+        column_colors[i],
         i == state.focused_column
       )
       if position < #visible then
@@ -124,7 +124,7 @@ function BoardView.render(state)
         line[#line + 1] = styled("│", border_color(i), i == state.focused_column)
         line[#line + 1] = styled(
           fit(content, width - 2),
-          (selected or marked) and COLUMN_COLORS[i] or foreground,
+          (selected or marked) and column_colors[i] or foreground,
           selected or marked or false
         )
         line[#line + 1] = styled("│", border_color(i), i == state.focused_column)
