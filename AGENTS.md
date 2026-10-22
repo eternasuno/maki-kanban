@@ -2,7 +2,7 @@
 
 ## Scope and structure
 
-maki-kanban is a Lua plugin for Maki 0.5.7+. Tasks represent project-level user work, not agent execution steps.
+maki-kanban is a Lua plugin for Maki 0.6.4+. Tasks represent project-level user work, not agent execution steps.
 
 - `plugin/kanban.lua`: auto-loaded entrypoint registering tools and `/kanban`.
 - `plugin.toml`: host version and filesystem permissions.
