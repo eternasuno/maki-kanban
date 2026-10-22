@@ -413,7 +413,7 @@ fn declared_permissions_support_real_tool_crud() {
     }
     assert_eq!(
         include_str!("../plugin.toml").trim(),
-        "min_maki_version = \"0.6.0\"\n\n[permissions]\nfs_read = true\nfs_write = true",
+        "min_maki_version = \"0.6.4\"\n\n[permissions]\nfs_read = true\nfs_write = true",
         "update test grants when the package manifest changes"
     );
     let (registry, _host) =
@@ -447,7 +447,9 @@ fn declared_permissions_support_real_tool_crud() {
         ),
     ] {
         let entry = registry.get(name).unwrap();
-        assert_eq!(entry.tool.required_permission(), Some(permission));
+        let reach = entry.tool.reach().expect("tool must declare its reach");
+        assert_eq!(reach.permission, permission);
+        assert!(reach.prompted);
         let invocation = entry.tool.parse(&input).unwrap();
         assert_eq!(
             smol::block_on(invocation.permission_scopes())
