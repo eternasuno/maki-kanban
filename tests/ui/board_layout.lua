@@ -46,7 +46,30 @@ check(
     and notifications[1].message:find("stale input", 1, true),
   "input edit failure is reported after Kanban closes"
 )
-_ENV.input_edit_result, _ENV.input_edit_error, _ENV.input_snapshot = true, nil, nil
+_ENV.input_edit_result, _ENV.input_edit_error, _ENV.input_edit_raise = true, nil, nil
+_ENV.input_error, notifications = "permission denied: 'session_read'", {}
+run({ { type = "key", key = "a" } })
+check(
+  #notifications == 1
+    and notifications[1].level == "error"
+    and notifications[1].message:find("session_read", 1, true)
+    and notifications[1].window_closed == false,
+  "input read failure is reported while the board stays open"
+)
+_ENV.input_error = nil
+_ENV.input_snapshot = { text = "ask ", cursor = 4, version = 7, session_id = "session-1" }
+_ENV.input_edit_raise, notifications = "permission denied: 'session_read'", {}
+run({ { type = "key", key = "a" } })
+check(
+  last_win.closed
+    and input_edit_closed
+    and #notifications == 1
+    and notifications[1].level == "error"
+    and notifications[1].message:find("session_read", 1, true)
+    and notifications[1].window_closed == true,
+  "raised input edit error is reported after Kanban closes"
+)
+_ENV.input_edit_raise, _ENV.input_snapshot = nil, nil
 check(#last_buf.lines == 27 and width(all[1]) == 90, "100x30 terminal renders 90x27 content")
 check(all[1] == string.rep(" ", 90) and all[#all] == string.rep(" ", 90), "vertical padding is blank at top and bottom")
 check(all[2]:sub(1, 2) == "  " and all[2]:sub(-2) == "  ", "horizontal padding is blank at left and right")

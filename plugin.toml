@@ -3,3 +3,4 @@ min_maki_version = "0.6.4"
 [permissions]
 fs_read = true
 fs_write = true
+session_read = true

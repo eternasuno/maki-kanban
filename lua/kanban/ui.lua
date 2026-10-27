@@ -29,6 +29,26 @@ local function handle_resize(state, buf, ev)
   buf:set_lines(state.view == "board" and state.board:render() or state.task:render())
 end
 
+local function read_input()
+  local ok, input, err = pcall(maki.ui.input)
+  if not ok then
+    return nil, input
+  end
+  return input, err
+end
+
+local function edit_input(opts)
+  local ok, edited, err = pcall(maki.ui.input_edit, opts)
+  if not ok then
+    return nil, edited
+  end
+  return edited, err
+end
+
+local function notify_reference_error(err)
+  maki.notify("Could not reference task in Maki input: " .. tostring(err), "error", { title = "Kanban" })
+end
+
 local function handle_reference(board, win)
   local tasks = board:selected_tasks()
   if #tasks == 0 then
@@ -39,19 +59,15 @@ local function handle_reference(board, win)
     references[#references + 1] = "[task:" .. task.id .. "] " .. task.title
   end
   local reference = table.concat(references, "\n")
-  win:close()
-  open_win = nil
-  local input, input_err = maki.ui.input()
+  local input, input_err = read_input()
   if not input then
-    maki.notify(
-      "Could not reference task in Maki input: " .. tostring(input_err or "input unavailable"),
-      "error",
-      { title = "Kanban" }
-    )
-    return "quit"
+    notify_reference_error(input_err or "input unavailable")
+    return
   end
   local separator = input.text ~= "" and not input.text:sub(1, input.cursor):match("\n$") and "\n" or ""
-  local inserted, edit_err = maki.ui.input_edit({
+  win:close()
+  open_win = nil
+  local inserted, edit_err = edit_input({
     start = input.cursor,
     stop = input.cursor,
     text = separator .. reference,
@@ -60,11 +76,7 @@ local function handle_reference(board, win)
     session_id = input.session_id,
   })
   if not inserted then
-    maki.notify(
-      "Could not reference task in Maki input: " .. tostring(edit_err or "input edit failed"),
-      "error",
-      { title = "Kanban" }
-    )
+    notify_reference_error(edit_err or "input edit failed")
   end
   return "quit"
 end

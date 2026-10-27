@@ -413,7 +413,7 @@ fn declared_permissions_support_real_tool_crud() {
     }
     assert_eq!(
         include_str!("../plugin.toml").trim(),
-        "min_maki_version = \"0.6.4\"\n\n[permissions]\nfs_read = true\nfs_write = true",
+        "min_maki_version = \"0.6.4\"\n\n[permissions]\nfs_read = true\nfs_write = true\nsession_read = true",
         "update test grants when the package manifest changes"
     );
     let (registry, _host) =

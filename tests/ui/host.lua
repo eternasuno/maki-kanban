@@ -4,6 +4,7 @@ return function(_ENV)
   _ENV.EVENTS, _ENV.last_opts, _ENV.last_buf, _ENV.last_win = {}, nil, nil, nil
   _ENV.input_snapshot, _ENV.input_edit_result, _ENV.input_edit_error, _ENV.notifications, _ENV.input_edit_closed =
     nil, true, nil, {}, nil
+  _ENV.input_error, _ENV.input_edit_raise = nil, nil
   function _ENV.make_buf()
     local buf = { lines = {} }
     function buf:set_lines(lines)
@@ -151,11 +152,17 @@ return function(_ENV)
         return editor.exit_code
       end,
       input = function()
+        if input_error then
+          error(input_error)
+        end
         return input_snapshot
       end,
       input_edit = function(opts)
         _ENV.input_edit_closed = last_win and last_win.closed
         _ENV.input_edit_opts = opts
+        if input_edit_raise then
+          error(input_edit_raise)
+        end
         return input_edit_result, input_edit_error
       end,
       open_win = function(buf, opts)
@@ -164,7 +171,8 @@ return function(_ENV)
       end,
     },
     notify = function(message, level, opts)
-      notifications[#notifications + 1] = { message = message, level = level, opts = opts }
+      notifications[#notifications + 1] =
+        { message = message, level = level, opts = opts, window_closed = last_win and last_win.closed }
     end,
   }
 

@@ -5,7 +5,7 @@
 maki-kanban is a Lua plugin for Maki 0.6.4+. Tasks represent project-level user work, not agent execution steps.
 
 - `plugin/kanban.lua`: auto-loaded entrypoint registering tools and `/kanban`.
-- `plugin.toml`: host version and filesystem permissions.
+- `plugin.toml`: host version and permissions (`fs_read`, `fs_write`, and `session_read` for chat input references).
 - `lua/kanban/store.lua`: validation, IDs, persistence and batch CRUD; shared by tools and UI.
 - `lua/kanban/tools.lua`: tool schemas and JSON/error responses.
 - `lua/kanban/ui.lua`: window lifecycle and event routing.
