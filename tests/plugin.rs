@@ -413,7 +413,7 @@ fn declared_permissions_support_real_tool_crud() {
     }
     assert_eq!(
         include_str!("../plugin.toml").trim(),
-        "min_maki_version = \"0.6.4\"\n\n[permissions]\nfs_read = true\nfs_write = true\nsession_read = true\ninput = true",
+        "min_maki_version = \"0.6.4\"\n\n[permissions]\nfs_read = true\nfs_write = true\nsession_read = true\ninput = true\nagent = true\nsession_write = true",
         "update test grants when the package manifest changes"
     );
     let (registry, host) = plugin_host_with_permissions(PluginPermissions::from_approved([
@@ -421,6 +421,8 @@ fn declared_permissions_support_real_tool_crud() {
         "fs_write",
         "session_read",
         "input",
+        "agent",
+        "session_write",
     ]));
     let path = store_path();
     for (name, input, permission, mutable) in [
