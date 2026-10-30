@@ -3,7 +3,7 @@ mod support;
 use std::{path::Path, sync::Arc};
 
 use maki_agent::{AgentMode, tools::ToolContext};
-use maki_lua::{Permission, PluginPermissions, UiAction, WinCommand, WinEvent};
+use maki_lua::{InputRequest, Permission, PluginPermissions, UiAction, WinCommand, WinEvent};
 use serde_json::{Value, json};
 
 use support::{
@@ -413,11 +413,15 @@ fn declared_permissions_support_real_tool_crud() {
     }
     assert_eq!(
         include_str!("../plugin.toml").trim(),
-        "min_maki_version = \"0.6.4\"\n\n[permissions]\nfs_read = true\nfs_write = true\nsession_read = true",
+        "min_maki_version = \"0.6.4\"\n\n[permissions]\nfs_read = true\nfs_write = true\nsession_read = true\ninput = true",
         "update test grants when the package manifest changes"
     );
-    let (registry, _host) =
-        plugin_host_with_permissions(PluginPermissions::from_approved(["fs_read", "fs_write"]));
+    let (registry, host) = plugin_host_with_permissions(PluginPermissions::from_approved([
+        "fs_read",
+        "fs_write",
+        "session_read",
+        "input",
+    ]));
     let path = store_path();
     for (name, input, permission, mutable) in [
         ("task_list", json!({}), Permission::FsRead, false),
@@ -467,6 +471,60 @@ fn declared_permissions_support_real_tool_crud() {
         json!({"path": store_path(), "tasks": [{"title": "permission check"}]}),
     );
     assert_eq!(created["task-1"]["status"], "todo");
+    host.event_handle().run_command(
+        Arc::from(PLUGIN_NAME),
+        Arc::from("/kanban"),
+        String::new(),
+        0,
+    );
+    let UiAction::OpenWin {
+        event_tx, cmd_rx, ..
+    } = host.ui_action_rx().recv_timeout(TIMEOUT).unwrap()
+    else {
+        panic!("/kanban did not open a window");
+    };
+    event_tx
+        .send(WinEvent::Key {
+            key: maki_lua::Key::parse("a").unwrap(),
+        })
+        .unwrap();
+    let UiAction::Input {
+        req: InputRequest::Read,
+        reply_tx,
+    } = host.ui_action_rx().recv_timeout(TIMEOUT).unwrap()
+    else {
+        panic!("a did not read the chat input");
+    };
+    reply_tx
+        .send(Ok(json!({
+            "text": "draft",
+            "cursor": 5,
+            "version": 7,
+            "session_id": "chat-session"
+        })))
+        .unwrap();
+
+    loop {
+        if matches!(cmd_rx.recv_timeout(TIMEOUT).unwrap(), WinCommand::Close) {
+            break;
+        }
+    }
+
+    let UiAction::Input {
+        req: InputRequest::Edit(edit),
+        reply_tx,
+    } = host.ui_action_rx().recv_timeout(TIMEOUT).unwrap()
+    else {
+        panic!("a did not insert the task reference");
+    };
+    assert_eq!(edit.start, 5);
+    assert_eq!(edit.stop, 5);
+    assert_eq!(edit.text, "\n[task:task-1] permission check");
+    assert_eq!(edit.cursor, Some(5 + edit.text.len()));
+    assert_eq!(edit.version, 7);
+    assert_eq!(edit.session_id, "chat-session");
+    reply_tx.send(Ok(json!(true))).unwrap();
+
     let updated = tool_json(
         &registry,
         "task_update",

@@ -10,7 +10,7 @@ Add the repository to your global Maki configuration (`~/.config/maki/init.lua`,
 maki.pack.add({ "https://github.com/eternasuno/maki-kanban" })
 ```
 
-Restart Maki and approve the package and its `fs_read` / `fs_write` / `session_read` permissions. `session_read` lets `a` read and edit the chat input when inserting task references. Use `/packupdate` to update the locked Git revision.
+Restart Maki and approve the package and its `fs_read` / `fs_write` / `session_read` / `input` permissions. `fs_read` and `fs_write` cover task storage and temporary description files. On hosts with chat-input permission checks, `session_read` lets `a` read the chat input, and `input` lets it insert task references without submitting. Use `/packupdate` to update the locked Git revision.
 
 ## Usage
 
