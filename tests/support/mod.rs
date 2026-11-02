@@ -1,4 +1,9 @@
-use std::{path::Path, process::Command, sync::Arc, time::Duration};
+use std::{
+    path::Path,
+    process::Command,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use maki_agent::{
     AgentMode, ToolOutput,
@@ -36,6 +41,12 @@ pub(super) fn in_disposable_project(name: &str) -> bool {
     false
 }
 
+pub(super) fn runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+
+    RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
+}
+
 pub(super) fn plugin_host() -> (Arc<ToolRegistry>, PluginHost) {
     plugin_host_with_permissions(PluginPermissions::trusted())
 }
@@ -43,6 +54,7 @@ pub(super) fn plugin_host() -> (Arc<ToolRegistry>, PluginHost) {
 pub(super) fn plugin_host_with_permissions(
     permissions: PluginPermissions,
 ) -> (Arc<ToolRegistry>, PluginHost) {
+    let _guard = runtime().enter();
     let registry = Arc::new(ToolRegistry::new());
     let host = PluginHost::new(Arc::clone(&registry)).unwrap();
     host.load_package(
@@ -76,7 +88,7 @@ pub(super) fn with_store(host: &PluginHost, source: &str) {
 }
 
 pub(super) fn dispatch_tool(context: &ToolContext, name: &str, input: &Value) -> String {
-    let done = smol::block_on(tool_dispatch::run(
+    let done = runtime().block_on(tool_dispatch::run(
         String::new(),
         name,
         input,
@@ -97,7 +109,8 @@ pub(super) fn exec_tool(
         .parse(&input)
         .expect("tool input failed to parse");
     let context = maki_agent::tools::test_support::stub_ctx(&AgentMode::Build);
-    smol::block_on(invocation.execute(&context))
+    runtime()
+        .block_on(invocation.execute(&context))
         .output
         .map(|output| match output {
             ToolOutput::Plain(output) => output.text,

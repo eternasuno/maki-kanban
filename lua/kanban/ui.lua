@@ -71,7 +71,6 @@ local function handle_reference(board, win)
     start = input.cursor,
     stop = input.cursor,
     text = separator .. reference,
-    cursor = input.cursor + #separator + #reference,
     version = input.version,
     session_id = input.session_id,
   })

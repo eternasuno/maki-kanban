@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use support::{
     PLUGIN_NAME, TIMEOUT, dispatch_tool, exec_tool, in_disposable_project, persisted, plugin_host,
-    plugin_host_with_permissions, run_lua, store_path, tool_json, with_store,
+    plugin_host_with_permissions, run_lua, runtime, store_path, tool_json, with_store,
 };
 
 #[test]
@@ -194,7 +194,11 @@ fn store_corrupt_data_and_filesystem_write_failure_are_non_destructive() {
         store.dir = maki.fs.dirname(path)
         for _, corrupt in ipairs({
             "{broken",
+            "null",
             "[]",
+            '{"tasks":null}',
+            '{"tasks":{"task-1":null}}',
+            '{"tasks":{"task-1":{"title":"null description","description":null,"status":"todo"}}}',
             '{"tasks":[{"title":"array","status":"todo"}]}',
             '{"tasks":{"task-1":{"title":"missing status"}}}',
             '{"tasks":{"task-1":{"title":"","status":"todo"}}}',
@@ -413,7 +417,7 @@ fn declared_permissions_support_real_tool_crud() {
     }
     assert_eq!(
         include_str!("../plugin.toml").trim(),
-        "min_maki_version = \"0.6.4\"\n\n[permissions]\nfs_read = true\nfs_write = true\nsession_read = true\ninput = true\nagent = true\nsession_write = true",
+        "min_maki_version = \"0.7.0\"\n\n[permissions]\nfs_read = true\nfs_write = true\nsession_read = true\ninput = true\nagent = true\nsession_write = true",
         "update test grants when the package manifest changes"
     );
     let (registry, host) = plugin_host_with_permissions(PluginPermissions::from_approved([
@@ -458,7 +462,8 @@ fn declared_permissions_support_real_tool_crud() {
         assert!(reach.prompted);
         let invocation = entry.tool.parse(&input).unwrap();
         assert_eq!(
-            smol::block_on(invocation.permission_scopes())
+            runtime()
+                .block_on(invocation.permission_scopes())
                 .unwrap()
                 .scopes,
             [path.as_str()]
@@ -519,13 +524,18 @@ fn declared_permissions_support_real_tool_crud() {
     else {
         panic!("a did not insert the task reference");
     };
-    assert_eq!(edit.start, 5);
-    assert_eq!(edit.stop, 5);
-    assert_eq!(edit.text, "\n[task:task-1] permission check");
-    assert_eq!(edit.cursor, Some(5 + edit.text.len()));
+    assert_eq!(edit.edits.len(), 1);
+    assert_eq!(edit.edits[0].start, 5);
+    assert_eq!(edit.edits[0].stop, 5);
+    assert_eq!(edit.edits[0].text, "\n[task:task-1] permission check");
+    assert_eq!(edit.cursor, None);
     assert_eq!(edit.version, 7);
     assert_eq!(edit.session_id, "chat-session");
-    reply_tx.send(Ok(json!(true))).unwrap();
+    reply_tx
+        .send(Ok(
+            json!({"version": 8, "cursor": 5 + edit.edits[0].text.len()}),
+        ))
+        .unwrap();
 
     let updated = tool_json(
         &registry,

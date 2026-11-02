@@ -23,7 +23,7 @@ check(
 )
 check(last_opts.width == "90%" and last_opts.height == "90%", "window uses host-managed 90% dimensions")
 _ENV.input_snapshot = { text = "ask ", cursor = 4, version = 7, session_id = "session-1" }
-_ENV.input_edit_result, _ENV.input_edit_error, notifications = true, nil, {}
+_ENV.input_edit_result, _ENV.input_edit_error, notifications = { version = 8, cursor = 22 }, nil, {}
 run({ { type = "key", key = "j" }, { type = "key", key = "a" } })
 check(
   last_win.closed
@@ -31,7 +31,7 @@ check(
     and input_edit_opts.start == 4
     and input_edit_opts.stop == 4
     and input_edit_opts.text == "\n[task:task-2] Two"
-    and input_edit_opts.cursor == 22
+    and input_edit_opts.cursor == nil
     and input_edit_opts.version == 7
     and input_edit_opts.session_id == "session-1",
   "a closes Kanban before inserting compact task reference at input cursor"
@@ -46,7 +46,7 @@ check(
     and notifications[1].message:find("stale input", 1, true),
   "input edit failure is reported after Kanban closes"
 )
-_ENV.input_edit_result, _ENV.input_edit_error, _ENV.input_edit_raise = true, nil, nil
+_ENV.input_edit_result, _ENV.input_edit_error, _ENV.input_edit_raise = { version = 8, cursor = 22 }, nil, nil
 _ENV.input_error, notifications = "permission denied: 'session_read'", {}
 run({ { type = "key", key = "a" } })
 check(

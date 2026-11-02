@@ -1,6 +1,6 @@
 # maki-kanban
 
-A project-level Kanban plugin for Maki 0.6.4+. Manage user work through an interactive board or agent tools, with tasks stored locally per project.
+A project-level Kanban plugin for Maki 0.7.0+. Manage user work through an interactive board or agent tools, with tasks stored locally per project.
 
 ## Installation
 
@@ -10,7 +10,7 @@ Add the repository to your global Maki configuration (`~/.config/maki/init.lua`,
 maki.pack.add({ "https://github.com/eternasuno/maki-kanban" })
 ```
 
-Restart Maki and approve the package and its `fs_read` / `fs_write` / `session_read` / `input` / `agent` / `session_write` permissions. `fs_read` and `fs_write` cover task storage and temporary description files. On hosts with chat-input permission checks, `session_read` lets `a` read the chat input; changing its text requires `input`, `agent` and `session_write` because the user's next Enter can send that text. Task-reference insertion does not submit the input. Use `/packupdate` to update the locked Git revision.
+Restart Maki and approve the package and its `fs_read` / `fs_write` / `session_read` / `input` / `agent` / `session_write` permissions. `fs_read` and `fs_write` cover task storage and temporary description files. `session_read` lets `a` read the chat input; changing its text requires `input`, `agent` and `session_write` because the user's next Enter can send that text. Task-reference insertion does not submit the input. Use `/packupdate` to update the locked Git revision.
 
 ## Usage
 
@@ -88,7 +88,7 @@ just lua-fmt-check
 just lua-lint
 ```
 
-The Rust integration tests follow `lu-zero/maki-lua-plugin-template`'s test-only Cargo package pattern, loading the plugin through the real Maki `PluginHost` with `PluginPermissions::trusted()`. A separate test grants only the permissions declared in `plugin.toml`; tool permission checks verify actual dispatcher rejection and unchanged persisted bytes when a required path scope is unavailable. The two Maki dev-dependencies are pinned to the upstream `v0.6.4` tag in `Cargo.toml`; `Cargo.lock` records the exact revision tested. Use `cargo update -p maki-lua` to update the shared Maki source, then run the integration suite. CI uses `--locked` for reproducible verification. They cover registration, real filesystem/JSON behavior, batch validation, tool dispatch and window lifecycle. Each test runs in a subprocess with a disposable working directory so the project's `.maki/kanban.json` is never accessed. Rust 1.88 or newer and native build tools are required; the devenv environment supplies Rust and Lua.
+The Rust integration tests follow `lu-zero/maki-lua-plugin-template`'s test-only Cargo package pattern, loading the plugin through the real Maki `PluginHost` with `PluginPermissions::trusted()`. A separate test grants only the permissions declared in `plugin.toml`; tool permission checks verify actual dispatcher rejection and unchanged persisted bytes when a required path scope is unavailable. The two Maki dev-dependencies are pinned to the upstream `v0.7.0` tag in `Cargo.toml`; `Cargo.lock` records the exact revision tested. Use `cargo update -p maki-lua` to update the shared Maki source, then run the integration suite. CI uses `--locked` for reproducible verification. They cover registration, real filesystem/JSON behavior, batch validation, tool dispatch and window lifecycle. Each test runs in a subprocess with a disposable working directory so the project's `.maki/kanban.json` is never accessed. Rust 1.99 or newer and native build tools are required; the devenv environment supplies Rust and Lua.
 
 Store unit tests use detached in-memory snapshots to cover business rules; real JSON, filesystem and permission behavior is covered by Rust host tests. UI unit tests cover state and layout, while event groups cover key user flows. The Lua scripts use local Maki API shims. `tests/ui.lua` runs isolated behavior groups in `tests/ui/`, each with fresh host, Store, editor and event state. Run selected groups with `lua tests/ui.lua description_retry task_cache board_lazy`; group order does not matter. UI state/editing lives in `board.lua` and `task.lua`, rendering in `board_view.lua` and `task_view.lua`, shared display helpers in `display.lua`, UTF-8 text wrapping in `text.lua`, and external editor cleanup in `editor.lua`. Host integration tests observe UI channels, not terminal rendering. For real-host checks, start Maki in a disposable project directory, verify tool registration with `maki prompt --tools --names`, and exercise `/kanban`, editing, batch actions and resizing. Use interactive `/reload` after Lua changes and `maki --no-jit` for clearer Lua stack traces.
 

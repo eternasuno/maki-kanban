@@ -3,7 +3,7 @@ return function(_ENV)
   _ENV.TERM = { cols = 100, rows = 30 }
   _ENV.EVENTS, _ENV.last_opts, _ENV.last_buf, _ENV.last_win = {}, nil, nil, nil
   _ENV.input_snapshot, _ENV.input_edit_result, _ENV.input_edit_error, _ENV.notifications, _ENV.input_edit_closed =
-    nil, true, nil, {}, nil
+    nil, { version = 1, cursor = 0 }, nil, {}, nil
   _ENV.input_error, _ENV.input_edit_raise = nil, nil
   function _ENV.make_buf()
     local buf = { lines = {} }
